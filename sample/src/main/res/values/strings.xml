@@ -1,0 +1,3 @@
+<resources>
+    <string name="jev_disclosure">After you start a task, Jev reads the visible UI of allowed apps and sends text and control information to TypeSafe Jev to select clicks, text input, and scrolling. You can stop at any time. This uses an online model.</string>
+</resources>
