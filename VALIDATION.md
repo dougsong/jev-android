@@ -1,12 +1,28 @@
 # Validation record
 
-Date: 2026-09-20. This record covers version 0.3.1, including the stop-overlay fingerprint regression fix, native long-click, timed long-press, and selectable task scenarios.
+Date: 2026-09-20. This record covers version 0.3.2, with earlier device and regression results retained under their version labels.
 
-## Build and offline checks
+## Version 0.3.2 launch-transition regression
+
+The user reported the same `accepted=false` / `BLOCKED` message with the Bilibili triple-action preset after Bilibili opened but before the `testv` search. The captured event sequence showed an `OPEN_APP` decision on the launcher accepted by Android, a new observation roughly 250 ms later still reporting the launcher, and a second `OPEN_APP` decision rejected as stale after the app switch completed. This is a separate timing case from the stop-overlay regression fixed in 0.3.1.
+
+Version 0.3.2 waits up to 10 seconds for the requested app to become the foreground app before accepting `OPEN_APP`. A stale snapshot rejected before any action is submitted permits a fresh observation and new provider decision, with at most three consecutive refreshes. Each refresh consumes a decision cycle from `maxSteps`, but is not an executed step or action-history entry. Refreshes remain within the task's time budget; a successful action resets the consecutive-refresh counter. The host gate applies again to the new decision. Other rejections and uncertain outcomes remain terminal, so submitted actions are not blindly repeated.
+
+Two focused Samsung regression tests passed: a target changes during the provider wait, causing one fresh decision and exactly one Save click; and app launch returns only when the requested package is observed. A separate run with `launchPackage=tv.danmaku.bili` passed on the real installed Bilibili app, with exactly one `OPEN_APP` execution and Bilibili present in the next provider observation. No search, video interaction, triple action, or live model API call was performed by this launch test.
+
+## Version 0.3.2 Samsung device checks
+
+The final instrumented run passed **7 tests, 0 failures**, in 20.401 seconds on the Samsung SM-F9460, Android 16 / API 36, through wireless ADB. It includes the previous five scenarios (selection, delayed text entry and Save, measured two-second hold, stale/allowlist rejection, native long-click) and the two new refresh/launch regression tests. The final run supplied `launchPackage=tv.danmaku.bili`, so its launch check exercised Bilibili rather than the demo app.
+
+As previously authorized for the local two-second hold test, the Samsung long-press interceptor setting was temporarily changed from `1` to `0` and restored to `1` in a `finally` block. The separate Bilibili launch test also passed with the original setting of `1`. After the final run, the test APK was removed, demo 0.3.2 was opened, and its accessibility service was rebound. Read-back checks confirmed versionCode 5, the original accessibility-service list including Bixby, accessibility enabled at `1`, Samsung long-press setting `1`, and the interceptor package's default state (`enabled=0`).
+
+One earlier full-suite attempt timed out in AndroidX `ActivityScenario.close()` while launching its empty cleanup activity, after the refresh test's action assertions had completed. The test helper now explicitly finishes its activity, waits at most five seconds for destruction, and closes the destroyed scenario. The final seven-test run above uses that helper; the earlier timeout report is retained separately.
+
+## Version 0.3.2 build and offline checks
 
 | Check | Result |
 |---|---|
-| `:core:test` | 21 passed, 0 failed |
+| `:core:test` | 29 passed, 0 failed |
 | `:sdk:testDebugUnitTest` | 64 passed, 0 failed |
 | `:sample:testDebugUnitTest` | 8 passed, 0 failed |
 | `:sdk:assembleRelease` | Passed; release AAR generated |
@@ -16,11 +32,13 @@ Date: 2026-09-20. This record covers version 0.3.1, including the stop-overlay f
 | `:sample:lintDebug` | 0 errors, 35 warnings |
 | Core and SDK local Maven publication | Passed; includes POM files, Gradle module metadata, and AAR/JAR artifacts |
 
-All 93 offline tests passed. The SDK suite includes 13 Jev protocol tests, 26 DeepSeek protocol tests, 12 HTTP/provider tests, 5 geometry tests, and 8 snapshot fingerprint tests. Long-click and long-press checks cover compatible target selection, allowlists, unsupported targets, hold-duration bounds, clipping to observed screen/window bounds, and occluded controls. Fingerprint tests check delayed overlay layout, real UI changes, gesture geometry, and missing gesture fingerprints. Provider checks also cover strict JSON, truncation, invalid candidates, request payloads, status handling, redirects/retries, response limits, cancellation, and sanitized errors. No external model API is called by these tests.
+All 101 offline tests passed. The SDK suite includes 13 Jev protocol tests, 26 DeepSeek protocol tests, 12 HTTP/provider tests, 5 geometry tests, and 8 snapshot fingerprint tests. Long-click and long-press checks cover compatible target selection, allowlists, unsupported targets, hold-duration bounds, clipping to observed screen/window bounds, and occluded controls. Fingerprint tests check delayed overlay layout, real UI changes, gesture geometry, and missing gesture fingerprints. Provider checks also cover strict JSON, truncation, invalid candidates, request payloads, status handling, redirects/retries, response limits, cancellation, and sanitized errors. No external model API is called by these tests.
+
+The 8 new core tests cover fresh target selection after a stale decision, omitted stale action history, bounded refreshes and decision budgets, reset after acceptance, terminal uncertain input/hold outcomes, repeated host-gate checks, cancellation, and timeouts. Existing Boolean runtimes remain terminal on `false`. Bytecode inspection confirmed that `DeviceRuntime` still contains only its original `observe` and `execute` methods; typed results use the optional `DetailedDeviceRuntime` interface and bridging extension.
 
 The 8 sample tests check provider-key isolation and the scenario catalog: fixture routing follows the actual host package, Bilibili scenarios replace the demo allowlist and input, custom fields start blank, and presets construct valid tasks.
 
-Lint warnings concern dependency updates, hardcoded UI strings, and sample manifest/resource configuration. Lint errors were not suppressed, and the build is not warning-free. Both local Maven publications use version 0.3.1.
+Lint warnings concern dependency updates, hardcoded UI strings, and sample manifest/resource configuration. Lint errors were not suppressed, and the build is not warning-free. Both local Maven publications use version 0.3.2.
 
 ## Delayed-provider regression
 
@@ -30,7 +48,7 @@ The stop overlay was added immediately before the first observation but had not 
 
 After installing 0.3.1, the same delayed save-text test passed on the same phone with the Samsung long-press setting left at its original value of `1`. It saved `Hello Jev` and independently returned `VERIFIED` after two mutating actions. This reproduces and verifies the SDK timing bug without using a model API key; it does not establish live DeepSeek API availability.
 
-## Samsung device checks
+## Version 0.3.1 Samsung device checks
 
 The final instrumented run passed **5 tests, 0 failures**, on a Samsung SM-F9460 running Android 16 / API 36, connected through wireless ADB. The tests use deterministic providers or direct SDK runtime calls, with no model API key or request:
 
@@ -48,7 +66,7 @@ The test setup rebinds only the demo accessibility service when instrumentation 
 
 ## Previous device-test baseline
 
-The initial version passed 2 instrumented tests with 0 failures on `Pixel_3a_API_33_x86_64`, Android 13 / API 33. Those older emulator reports precede the language, provider, and long-press updates. The Samsung results above describe the current version.
+The initial version passed 2 instrumented tests with 0 failures on `Pixel_3a_API_33_x86_64`, Android 13 / API 33. Those older emulator reports precede the language, provider, and long-press updates. The version-labeled Samsung sections above distinguish current results from earlier baselines.
 
 Device tests temporarily enabled the accessibility service and restored the original settings afterward. The `enabled_accessibility_services` setting was checked and had returned to its original empty value.
 
@@ -71,7 +89,7 @@ Device tests use a **deterministic `DecisionProvider`** and execute real Android
 - Bilibili search and triple-action presets have not been validated end to end. They have no independent outcome verifier; provider-reported completion is `UNVERIFIED`.
 - macOS setup instructions are included, but the project has not been built or run on a Mac in this validation session.
 - Physical Xiaomi testing has not been performed. HyperOS permissions, background behavior, and third-party app task success rates have not been verified.
-- Android version coverage is incomplete. API 26 is the declared minimum; device tests cover API 36 for this version and API 33 for the earlier baseline.
+- Android version coverage is incomplete. API 26 is the declared minimum; completed device tests cover API 36 for version 0.3.1 and API 33 for the earlier baseline. Version 0.3.2 device verification is pending.
 - SDK artifacts have not been published to Maven Central or an app store. The source is MIT-licensed; the artifact and group coordinates currently exist only in the local Maven distribution.
 
 ## Local reports
@@ -81,7 +99,11 @@ Device tests use a **deterministic `DecisionProvider`** and execute real Android
 - `sample/build/reports/tests/testDebugUnitTest/index.html`
 - `sample/build/reports/deepseek-delay-regression-before-0.3.1.txt` (delayed save-text failure on 0.3.0)
 - `sample/build/reports/deepseek-delay-regression-after-0.3.1.txt` (same delayed save-text test passing on 0.3.1)
-- `sample/build/reports/samsung-instrumentation-0.3.1.txt` (current five-test device result)
+- `sample/build/reports/launch-refresh-regression-0.3.2.txt` (two focused regression tests)
+- `sample/build/reports/bilibili-launch-regression-0.3.2.txt` (real Bilibili launch with the original Samsung setting)
+- `sample/build/reports/samsung-instrumentation-0.3.2.txt` (current seven-test device result)
+- `sample/build/reports/samsung-instrumentation-0.3.2-cleanup-timeout.txt` (earlier test-framework cleanup timeout; superseded by the final run)
+- `sample/build/reports/samsung-instrumentation-0.3.1.txt` (previous five-test device result)
 - `sdk/build/reports/lint-results-debug.html`
 - `sample/build/reports/lint-results-debug.html`
 - `sample/build/reports/androidTests/connected/debug/index.html` (previous device-test baseline)

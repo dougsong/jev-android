@@ -12,9 +12,10 @@ API 尚未稳定。项目未发布到 Maven Central；下文的依赖坐标仅�
 - 支持点击、长按可访问控件、替换输入框内容、前后滚动、返回、打开允许的应用、等待，以及报告完成或受阻。
 - `Operation.LONG_CLICK` 调用控件声明支持的 Android `ACTION_LONG_CLICK` 动作；`Operation.LONG_PRESS` 在当前读取到的可见、可操作控件中心按住触屏。按住时长由宿主通过 `Task.longPressDurationMillis` 指定（默认 2,000 毫秒，允许范围为 500–5,000 毫秒），模型不能提供坐标或时长。
 - 本 SDK 的两个后端均不生成任意输入文字。调用方通过 `Task.textValues` 提供命名的准确候选值，由选中的模型选择；只需要当前后端的 API Key。
-- 执行前重新读取屏幕并比较指纹。页面过期时停止任务，避免把旧节点编号用于变化后的界面。
+- 执行前重新读取屏幕并比较指纹。如果页面在动作提交前已变化，重新观察并让后端做出新决策，最多连续刷新三次。每次刷新都会占用一个决策步骤，仍受任务步数和时间上限限制。不会在变化后的页面上重复执行旧决策。
 - 首次观察前等待停止按钮完成布局。手势几何信息单独校验，避免模型请求期间的浮层布局变化导致原生节点操作被误判为过期。
-- 输入后读取控件并验证完整值。操作被拒绝时停止，不自动重复执行。
+- 启动应用后，最多等待 10 秒确认目标应用进入前台，再报告启动已接受，避免 Android 切换应用期间再次做出启动决策。
+- 输入后读取控件并验证完整值。操作被拒绝或结果不确定时停止，不自动重复执行；只有明确在提交前因页面过期而被拒绝的动作才会触发重新观察。
 - 提供包名白名单、步骤和时间限制、最低置信度、无进展检测及宿主自定义操作策略。
 - 取消协程会取消正在进行的 HTTP 请求；无障碍悬浮按钮可停止后续操作。已经提交给 Android 的操作无法撤销；已经提交的按住手势可能持续到设定时长结束后才释放触屏。
 - `DONE` 仅表示模型声称完成。只有提供 `OutcomeVerifier` 且验证通过，任务才返回 `VERIFIED`，否则返回 `UNVERIFIED`。
@@ -138,7 +139,7 @@ Linux 使用 `./gradlew`。项目设置了 `android.overridePathCheck=true`，�
 
 - `sample/build/outputs/apk/debug/sample-debug.apk`
 - `sdk/build/outputs/aar/sdk-release.aar`
-- `core/build/libs/core-0.3.1.jar`
+- `core/build/libs/core-0.3.2.jar`
 
 **AAR 不包含全部依赖。** SDK 还依赖 core 模块、协程、OkHttp 和 Gson，建议按下面的源码模块或 Maven 方式接入。
 
@@ -170,7 +171,7 @@ maven { url = uri("vendor/jev-maven") }
 宿主 app 添加依赖：
 
 ```kotlin
-implementation("io.github.jevandroid:jev-android:0.3.1")
+implementation("io.github.jevandroid:jev-android:0.3.2")
 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 ```
 
@@ -257,7 +258,7 @@ val job = service.start(
 
 `OutcomeVerifier` 接收新读取的 `UiSnapshot`，用于检查具体业务结果。示例会核对测试页面显示的保存值或长按结果；验证器返回 false 时，结果为 `UNVERIFIED`。
 
-`ActionGate` 可以接入宿主确认界面或业务规则，返回 false 会停止任务。如果等待确认时页面发生变化，运行时仍会拒绝基于旧页面的动作。不要仅凭后端返回的置信度授权敏感操作。
+`ActionGate` 可以接入宿主确认界面或业务规则，返回 false 会停止任务。如果等待确认时页面发生变化，运行时会在提交前拒绝旧决策；允许刷新时会获取新决策，并再次经过 gate 检查。不要仅凭后端返回的置信度授权敏感操作。
 
 实现 `DecisionProvider` 可以替换模型，实现 `DeviceRuntime` 可以用模拟设备测试。直接使用 `JevAgent` 时，由宿主负责协程生命周期、错误处理、停止控制和同一设备的互斥访问。通常使用 `JevAccessibilityService.start` 更方便，它限制每个服务只能运行一个任务。
 
@@ -295,14 +296,16 @@ B 站预设面向国内版 Android App，是任务说明示例，尚未验证为
 - 单个快照最多包含 220 个元素，节点遍历也有上限。较长页面需要滚动；截断后未包含的控件不会提供给任何模型。
 - 示例分别在内存中保存 Jev 与 DeepSeek 的 Key，切换后端不会复用另一个后端的密钥。密钥不持久化或备份；配置页面禁止截图。SDK 不替宿主管理凭据。向其他用户分发时，建议使用用户自备 Key 或受控后端。
 - HTTP、协议和运行时异常交给 `onError`；取消遵循协程取消语义，不作为成功返回。
-- 操作失败、页面过期、低置信度、gate 拒绝或无进展时返回 `BLOCKED`，不会静默重新提交操作。
+- 操作失败、低置信度、gate 拒绝、无进展或用尽连续三次页面刷新机会时返回 `BLOCKED`。刷新要求确认动作尚未提交，重新读取当前页面，并让后端做出新决策。成功执行动作后会重置连续刷新计数。已提交或结果不确定的操作不会自动重复提交。
 - 模型声称完成，以及 Android 返回 `performAction=true`，都不是业务结果成功的证据。
 
 ## 测试与后续工作
 
 离线测试覆盖取消、超时、步骤限制、白名单、无效目标、输入值限制、结果验证、低置信度、动作失败后停止且不重试，以及 Jev 响应的概率分布与分支校验。DeepSeek 测试覆盖格式错误或被截断的响应、无效动作选项、HTTP 状态处理、响应大小限制及网络请求取消。长按测试检查动作是否可用及后端决策；示例测试覆盖场景配置和切换后端时的密钥隔离。后端响应和 HTTP 行为使用离线样例与模拟请求验证，不调用真实 API。Android 构建和 lint 通过不等于真机任务成功，当前验证状态见 [VALIDATION.md](VALIDATION.md)。
 
-`:sample:connectedDebugAndroidTest` 在连接的模拟器或测试设备上使用确定性决策提供者，检查真实无障碍读取、输入、点击、长按、结果验证、过期页面拒绝和白名单限制。测试会临时开启服务，并在结束后恢复原有无障碍设置。请仅在专用测试设备上运行；它不调用 Jev 或 DeepSeek，也不能证明真实模型成功率。本项目尚未通过真实 API 调用验证这两个后端。
+`:sample:connectedDebugAndroidTest` 在连接的模拟器或测试设备上使用确定性决策提供者，检查真实无障碍读取、输入、点击、长按、结果验证、应用启动完成、过期页面刷新和白名单限制。测试会临时开启服务，并在结束后恢复原有无障碍设置。请仅在专用测试设备上运行；这些自动化结果不调用 Jev 或 DeepSeek，不能证明实时 API 可用性或真实模型成功率。
+
+自定义运行时可以实现 `DetailedDeviceRuntime`，区分 `StaleBeforeDispatch` 与操作被拒绝或结果不确定。已有 `DeviceRuntime` 实现仍保留 Boolean 接口；返回 `false` 仍会停止任务，因为 agent 无法确认动作是否已经提交。
 
 首阶段优先验证真实模型调用、中文目标界面和小米真机。后续可加入截图辅助、可选文字生成、更多输入控件、可拖动停止按钮和后端性能评测。通过 `JevProvider(apiKey = key, model = "...")` 或 `DeepSeekProvider(apiKey = key, model = "...")` 可以指定模型；可用性和行为由对应服务决定。默认 `jev-latest` 会跟随服务端更新。
 

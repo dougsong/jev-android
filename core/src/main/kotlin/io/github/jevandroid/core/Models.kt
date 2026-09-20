@@ -25,6 +25,7 @@ data class Task(
     val allowedPackages: Set<String>,
     /** Named literal values. Providers select a key instead of inventing text. */
     val textValues: Map<String, String> = emptyMap(),
+    /** Maximum decision cycles, including stale decisions discarded before dispatch. */
     val maxSteps: Int = 30,
     val timeoutMillis: Long = 120_000,
     val minimumConfidence: Double = 0.65,
@@ -52,11 +53,23 @@ data class Decision(
 
 data class StepRecord(val step: Int, val operation: Operation, val target: String?, val accepted: Boolean)
 enum class Status { VERIFIED, UNVERIFIED, BLOCKED, LIMIT_REACHED, TIMED_OUT }
+/** steps counts non-stale execution attempts; pre-dispatch refreshes only consume Task.maxSteps. */
 data class RunResult(val status: Status, val steps: Int, val message: String)
+
+sealed interface ActionResult {
+    data object Accepted : ActionResult
+    /** Only valid when a fresh check failed before any UI action was dispatched. */
+    data object StaleBeforeDispatch : ActionResult
+    data class Rejected(
+        val reason: String = "Action rejected or outcome uncertain; inspect before restarting",
+    ) : ActionResult
+}
 
 sealed interface AgentEvent {
     data class Observed(val step: Int, val packageName: String, val elementCount: Int) : AgentEvent
     data class Chosen(val step: Int, val decision: Decision) : AgentEvent
+    /** The old decision was discarded without dispatch; a fresh observation and decision follow. */
+    data class Refreshing(val step: Int, val operation: Operation, val attempt: Int) : AgentEvent
     data class Executed(val record: StepRecord) : AgentEvent
     data class Finished(val result: RunResult) : AgentEvent
 }
@@ -70,6 +83,20 @@ interface DeviceRuntime {
     /** Must reject stale snapshots, invalid targets and actions outside the allowlist. */
     suspend fun execute(task: Task, snapshot: UiSnapshot, decision: Decision): Boolean
 }
+
+/** Optional capability; the original DeviceRuntime interface remains binary-compatible. */
+interface DetailedDeviceRuntime : DeviceRuntime {
+    /**
+     * Distinguishes a provably unsubmitted stale decision from a failed or uncertain action.
+     * Never return StaleBeforeDispatch after submitting any part of the requested action.
+     */
+    suspend fun executeWithResult(task: Task, snapshot: UiSnapshot, decision: Decision): ActionResult
+}
+
+/** Legacy Boolean runtimes remain terminal on false because dispatch status is unknown. */
+suspend fun DeviceRuntime.executeWithResult(task: Task, snapshot: UiSnapshot, decision: Decision): ActionResult =
+    if (this is DetailedDeviceRuntime) executeWithResult(task, snapshot, decision)
+    else if (execute(task, snapshot, decision)) ActionResult.Accepted else ActionResult.Rejected()
 
 fun interface OutcomeVerifier {
     suspend fun verify(task: Task, snapshot: UiSnapshot): Boolean

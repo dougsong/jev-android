@@ -16,6 +16,19 @@ class JevAgentTest {
         override suspend fun observe(task: Task) = snapshot
         override suspend fun execute(task: Task, snapshot: UiSnapshot, decision: Decision): Boolean { mutations++; return accepted }
     }
+    private class ResultRuntime(
+        var snapshot: UiSnapshot,
+        val action: (ResultRuntime, UiSnapshot, Decision) -> ActionResult,
+    ) : DetailedDeviceRuntime {
+        val attempts = mutableListOf<Decision>()
+        override suspend fun observe(task: Task) = snapshot
+        override suspend fun execute(task: Task, snapshot: UiSnapshot, decision: Decision): Boolean =
+            error("Agent must use the detailed result")
+        override suspend fun executeWithResult(task: Task, snapshot: UiSnapshot, decision: Decision): ActionResult {
+            attempts += decision
+            return action(this, snapshot, decision)
+        }
+    }
     private fun provider(d: Decision) = object : DecisionProvider {
         override suspend fun decide(task: Task, snapshot: UiSnapshot, history: List<StepRecord>) = d
     }
@@ -125,6 +138,140 @@ class JevAgentTest {
         val runtime = FakeRuntime(snapshot, false)
         assertEquals(Status.BLOCKED, JevAgent(runtime, provider(Decision(Operation.CLICK, "1"))).run(task).status)
         assertEquals(1, runtime.mutations)
+    }
+    @Test fun staleDecisionIsDiscardedAndFreshTargetIsChosenWithoutRecordingAnAction() = runTest {
+        val fresh = snapshot.copy(fingerprint = "v2", elements = listOf(snapshot.elements.first().copy(id = "3")))
+        var dispatched = 0
+        val runtime = ResultRuntime(snapshot) { device, _, _ ->
+            if (device.attempts.size == 1) {
+                device.snapshot = fresh
+                ActionResult.StaleBeforeDispatch
+            } else {
+                dispatched++
+                ActionResult.Accepted
+            }
+        }
+        val histories = mutableListOf<List<StepRecord>>()
+        val observations = mutableListOf<UiSnapshot>()
+        val p = object : DecisionProvider {
+            override suspend fun decide(task: Task, snapshot: UiSnapshot, history: List<StepRecord>): Decision {
+                observations += snapshot
+                histories += history.toList()
+                return if (history.isEmpty()) Decision(Operation.CLICK, snapshot.elements.first().id)
+                    else Decision(Operation.DONE)
+            }
+        }
+        val gatedTargets = mutableListOf<String?>()
+        val events = mutableListOf<AgentEvent>()
+        val result = JevAgent(runtime, p, gate = ActionGate { _, _, decision ->
+            gatedTargets += decision.target; true
+        }).run(task, events::add)
+        assertEquals(Status.UNVERIFIED, result.status)
+        assertEquals(1, result.steps)
+        assertEquals(1, dispatched)
+        assertEquals(listOf("1", "3"), runtime.attempts.map { it.target })
+        assertEquals(listOf("1", "3"), gatedTargets)
+        assertEquals(listOf("v1", "v2", "v2"), observations.map { it.fingerprint })
+        assertTrue(histories[0].isEmpty())
+        assertTrue(histories[1].isEmpty())
+        assertEquals(listOf(StepRecord(1, Operation.CLICK, "3", true)), histories[2])
+        assertEquals(listOf(AgentEvent.Refreshing(0, Operation.CLICK, 1)), events.filterIsInstance<AgentEvent.Refreshing>())
+        assertEquals(1, events.filterIsInstance<AgentEvent.Executed>().size)
+    }
+    @Test fun continuouslyStaleUiStopsAfterThreeRefreshesWithoutAnyExecutedStep() = runTest {
+        val runtime = ResultRuntime(snapshot) { _, _, _ -> ActionResult.StaleBeforeDispatch }
+        val events = mutableListOf<AgentEvent>()
+        val result = JevAgent(runtime, provider(Decision(Operation.CLICK, "1"))).run(task, events::add)
+        assertEquals(Status.BLOCKED, result.status)
+        assertTrue(result.message.contains("three refreshes"))
+        assertEquals(0, result.steps)
+        assertEquals(4, runtime.attempts.size)
+        assertEquals(listOf(1, 2, 3), events.filterIsInstance<AgentEvent.Refreshing>().map { it.attempt })
+        assertTrue(events.filterIsInstance<AgentEvent.Executed>().isEmpty())
+    }
+    @Test fun staleRefreshesStillConsumeTheDecisionCycleBudget() = runTest {
+        val runtime = ResultRuntime(snapshot) { _, _, _ -> ActionResult.StaleBeforeDispatch }
+        val events = mutableListOf<AgentEvent>()
+        val result = JevAgent(runtime, provider(Decision(Operation.CLICK, "1")))
+            .run(task.copy(maxSteps = 2), events::add)
+        assertEquals(Status.LIMIT_REACHED, result.status)
+        assertEquals(0, result.steps)
+        assertEquals(2, runtime.attempts.size)
+        assertEquals(1, events.filterIsInstance<AgentEvent.Refreshing>().size)
+        assertTrue(events.filterIsInstance<AgentEvent.Executed>().isEmpty())
+    }
+    @Test fun acceptedActionResetsTheConsecutiveRefreshLimit() = runTest {
+        val runtime = ResultRuntime(snapshot) { device, _, _ ->
+            device.snapshot = device.snapshot.copy(fingerprint = "v${device.attempts.size + 1}")
+            if (device.attempts.size % 4 == 0) ActionResult.Accepted else ActionResult.StaleBeforeDispatch
+        }
+        val p = object : DecisionProvider {
+            override suspend fun decide(task: Task, snapshot: UiSnapshot, history: List<StepRecord>) =
+                if (history.size == 2) Decision(Operation.DONE) else Decision(Operation.CLICK, "1")
+        }
+        val events = mutableListOf<AgentEvent>()
+        val result = JevAgent(runtime, p).run(task, events::add)
+        assertEquals(Status.UNVERIFIED, result.status)
+        assertEquals(2, result.steps)
+        assertEquals(8, runtime.attempts.size)
+        assertEquals(listOf(1, 2, 3, 1, 2, 3), events.filterIsInstance<AgentEvent.Refreshing>().map { it.attempt })
+        assertEquals(2, events.filterIsInstance<AgentEvent.Executed>().size)
+    }
+    @Test fun uncertainSubmittedLongPressAndInputAreTerminalAndKeepTheirReason() = runTest {
+        val observed = snapshot.copy(elements = listOf(
+            snapshot.elements.first().copy(operations = setOf(Operation.LONG_PRESS, Operation.SET_TEXT)),
+        ))
+        for (decision in listOf(Decision(Operation.LONG_PRESS, "1"), Decision(Operation.SET_TEXT, "1", "message"))) {
+            val reason = "Submitted ${decision.operation}; result could not be confirmed"
+            val runtime = ResultRuntime(observed) { _, _, _ -> ActionResult.Rejected(reason) }
+            val events = mutableListOf<AgentEvent>()
+            val result = JevAgent(runtime, provider(decision)).run(task, events::add)
+            assertEquals(Status.BLOCKED, result.status)
+            assertEquals(reason, result.message)
+            assertEquals(1, result.steps)
+            assertEquals(1, runtime.attempts.size)
+            assertTrue(events.filterIsInstance<AgentEvent.Refreshing>().isEmpty())
+            assertFalse(events.filterIsInstance<AgentEvent.Executed>().single().record.accepted)
+        }
+    }
+    @Test fun refreshedDecisionMustPassTheHostGateAgain() = runTest {
+        val runtime = ResultRuntime(snapshot) { _, _, _ -> ActionResult.StaleBeforeDispatch }
+        var gateCalls = 0
+        val result = JevAgent(runtime, provider(Decision(Operation.CLICK, "1")), gate = ActionGate { _, _, _ ->
+            ++gateCalls == 1
+        }).run(task)
+        assertEquals(Status.BLOCKED, result.status)
+        assertEquals("Host policy stopped action", result.message)
+        assertEquals(0, result.steps)
+        assertEquals(2, gateCalls)
+        assertEquals(1, runtime.attempts.size)
+    }
+    @Test fun cancellationDuringRefreshDelayNeverReexecutesTheOldDecision() = runTest {
+        val runtime = ResultRuntime(snapshot) { _, _, _ -> ActionResult.StaleBeforeDispatch }
+        val refreshing = CompletableDeferred<Unit>()
+        val job = launch {
+            JevAgent(runtime, provider(Decision(Operation.CLICK, "1"))).run(task) {
+                if (it is AgentEvent.Refreshing) refreshing.complete(Unit)
+            }
+        }
+        refreshing.await()
+        job.cancelAndJoin()
+        assertEquals(1, runtime.attempts.size)
+    }
+    @Test fun deadlineStillAppliesWhileRequestingAReplacementDecision() = runTest {
+        val runtime = ResultRuntime(snapshot) { _, _, _ -> ActionResult.StaleBeforeDispatch }
+        var providerCalls = 0
+        val p = object : DecisionProvider {
+            override suspend fun decide(task: Task, snapshot: UiSnapshot, history: List<StepRecord>): Decision {
+                if (++providerCalls == 1) return Decision(Operation.CLICK, "1")
+                awaitCancellation()
+            }
+        }
+        val result = JevAgent(runtime, p).run(task.copy(timeoutMillis = 1_000))
+        assertEquals(Status.TIMED_OUT, result.status)
+        assertEquals(0, result.steps)
+        assertEquals(2, providerCalls)
+        assertEquals(1, runtime.attempts.size)
     }
     @Test fun cancellationDuringModelCallNeverMutates() = runTest {
         val runtime = FakeRuntime(snapshot)

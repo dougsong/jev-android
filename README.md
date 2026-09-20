@@ -12,9 +12,10 @@ The API is still unstable. The project is not published to Maven Central; the de
 - Supports clicking, long-pressing accessible controls, replacing text field contents, scrolling forward or backward, going back, launching allowed apps, waiting, and reporting completion or a blocked task.
 - `Operation.LONG_CLICK` invokes a control's advertised Android `ACTION_LONG_CLICK` action. `Operation.LONG_PRESS` holds a touch at the center of a currently observed, visible, actionable control. The host controls the hold duration through `Task.longPressDurationMillis` (default 2,000 ms; allowed range 500–5,000 ms); the model cannot supply coordinates or a duration.
 - Neither backend generates arbitrary input text in this SDK. `Task.textValues` supplies named, exact candidate values for the selected model to choose from. Only the selected provider's API key is required.
-- Reads the screen again and compares fingerprints before execution. A stale screen stops the task so old node IDs cannot be reused on a changed interface.
+- Reads the screen again and compares fingerprints before execution. If the screen changed before any action was submitted, the agent observes again and asks the provider for a new decision, up to three consecutive refreshes. Each refresh consumes a decision step and remains within the task's step and time budgets. It never replays the old decision on the changed interface.
 - Waits for the stop control to be laid out before the first observation. Gesture geometry is checked separately, so overlay layout does not invalidate native node actions while a model request is in flight.
-- Reads back text after input to verify the complete value. Rejected actions stop the task and are not automatically replayed.
+- Waits up to 10 seconds for a launched app to become the foreground app before reporting an accepted launch, preventing a second launch decision while Android is still switching apps.
+- Reads back text after input to verify the complete value. Rejected or uncertain actions stop the task and are not automatically replayed; only a stale snapshot rejected before dispatch can trigger a new observation.
 - Includes package allowlists, step and time budgets, a minimum confidence threshold, no-progress detection, and a host-defined action policy.
 - Coroutine cancellation cancels in-flight HTTP requests. An accessibility overlay button stops future actions. Actions already submitted to Android cannot be undone; a submitted hold may continue until its configured duration expires and the touch is released.
 - `DONE` is only the model's claim of completion. A task returns `VERIFIED` only when an `OutcomeVerifier` is supplied and passes; otherwise, it returns `UNVERIFIED`.
@@ -138,7 +139,7 @@ Adjust the JDK path for your installation. The script preserves the original pro
 
 - `sample/build/outputs/apk/debug/sample-debug.apk`
 - `sdk/build/outputs/aar/sdk-release.aar`
-- `core/build/libs/core-0.3.1.jar`
+- `core/build/libs/core-0.3.2.jar`
 
 **The AAR does not bundle all dependencies.** The SDK also depends on the core module, coroutines, OkHttp, and Gson. Use one of the source-module or Maven integration options below.
 
@@ -170,7 +171,7 @@ maven { url = uri("vendor/jev-maven") }
 Add these dependencies to the host app:
 
 ```kotlin
-implementation("io.github.jevandroid:jev-android:0.3.1")
+implementation("io.github.jevandroid:jev-android:0.3.2")
 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 ```
 
@@ -257,7 +258,7 @@ The main-thread, cancellation, and verification requirements are the same for bo
 
 An `OutcomeVerifier` receives a fresh `UiSnapshot` and can check the specific business result. The sample checks the saved value or long-press result displayed on its test screen. If the verifier returns false, the result is `UNVERIFIED`.
 
-An `ActionGate` can connect to the host's confirmation UI or business rules. Returning false stops the task. If the screen changes while confirmation is pending, the runtime still rejects actions based on the old screen. A provider's confidence alone should not authorize sensitive actions.
+An `ActionGate` can connect to the host's confirmation UI or business rules. Returning false stops the task. If the screen changes while confirmation is pending, the runtime rejects the old decision before dispatch; a permitted refresh obtains a new decision and applies the gate again. A provider's confidence alone should not authorize sensitive actions.
 
 Implement `DecisionProvider` to use another model, or implement `DeviceRuntime` to test with a simulated device. When using `JevAgent` directly, the host owns coroutine lifetimes, error handling, stop controls, and exclusive access to the device. `JevAccessibilityService.start` is usually simpler and permits only one active task per service.
 
@@ -295,14 +296,16 @@ The Bilibili presets target the mainland Android app and are example task instru
 - A snapshot contains at most 220 elements, and node traversal is bounded. Long screens require scrolling. Controls omitted by truncation are not offered to either model.
 - The sample keeps separate keys for Jev and DeepSeek only in memory; switching providers does not reuse the other provider's key. Keys are not persisted or backed up. Screenshots are disabled on the configuration screen. The SDK does not manage host credentials. Apps distributed to other users should use user-supplied keys or a controlled backend.
 - HTTP, protocol, and runtime exceptions reach `onError`. Cancellation follows coroutine cancellation semantics and is not returned as success.
-- Action failure, a stale screen, low confidence, gate rejection, or lack of progress returns `BLOCKED`. Operations are not silently resubmitted.
+- Action failure, low confidence, gate rejection, lack of progress, or exhausting the three permitted consecutive stale-screen refreshes returns `BLOCKED`. A refresh requires proof that no action was submitted, reads the current screen, and requests a new provider decision. A successful action resets the consecutive-refresh counter. An already submitted or uncertain operation is never automatically resubmitted.
 - A model's completion claim and Android's `performAction=true` are not evidence that the intended business result was achieved.
 
 ## Tests and future work
 
 Offline tests cover cancellation, timeouts, step limits, allowlists, invalid targets, input-value restrictions, outcome verification, low confidence, stopping without retry after action failure, and Jev response distribution and branch validation. DeepSeek tests cover malformed or truncated responses, invalid action choices, HTTP status handling, response-size limits, and transport cancellation. Long-press tests check action eligibility and provider decisions; sample tests cover scenario configuration and provider-key isolation when switching backends. Provider responses and HTTP behavior are tested with offline fixtures and mocks, not live API calls. Android builds and lint do not establish real-device task success. See [VALIDATION.md](VALIDATION.md) for the current validation status.
 
-The `:sample:connectedDebugAndroidTest` task uses a deterministic decision provider on a connected emulator or test device. It checks real accessibility reads, text entry, clicking, long-pressing, result verification, stale-screen rejection, and allowlist enforcement. Tests temporarily enable the service and restore the previous accessibility settings afterward. Run them only on a dedicated test device. They do not call Jev or DeepSeek or establish real-model success rates. Neither provider has been validated with live API calls in this project yet.
+The `:sample:connectedDebugAndroidTest` task uses a deterministic decision provider on a connected emulator or test device. It checks real accessibility reads, text entry, clicking, long-pressing, result verification, app launch completion, stale-screen refreshes, and allowlist enforcement. Tests temporarily enable the service and restore the previous accessibility settings afterward. Run them only on a dedicated test device. These automated results do not call Jev or DeepSeek or establish live API availability or real-model success rates.
+
+Custom runtimes can implement `DetailedDeviceRuntime` to distinguish `StaleBeforeDispatch` from a rejected or uncertain operation. Existing `DeviceRuntime` implementations retain their Boolean API; `false` remains terminal because the agent cannot prove that no action was submitted.
 
 Initial validation priorities include live model calls, Chinese-language target interfaces, and physical Xiaomi devices. Future work may add screenshot assistance, optional text generation, more input controls, a draggable stop button, and provider performance benchmarks. Set a model explicitly with `JevProvider(apiKey = key, model = "...")` or `DeepSeekProvider(apiKey = key, model = "...")`; availability and behavior depend on the provider. The default `jev-latest` follows server-side updates.
 
