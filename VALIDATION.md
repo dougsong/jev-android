@@ -1,6 +1,34 @@
 # Validation record
 
-Date: 2026-09-20. This record covers version 0.3.3, with earlier device and regression results retained under their version labels.
+Date: 2026-09-21. This record covers version 0.3.4, with earlier device and regression results retained under their version labels.
+
+## Version 0.3.4 bounded DeepSeek action selection
+
+After version 0.3.3 was installed, the user reported `INVALID_TARGET` with `attempts=2` during the Bilibili preset. This establishes that the final response selected a target outside the valid candidates for its chosen operation after one correction request. The diagnostic does not retain the first rejection category or the actual invalid target value. Selecting a text child rather than its clickable parent is a possible explanation, but it has not been established from these logs.
+
+Version 0.3.4 couples each valid operation and target into a locally generated `action_id`. DeepSeek receives the IDs as an enum in a strict `select_action` function schema and must return exactly one call to that function with `action_id`, `text_key`, and `confidence` arguments. It no longer supplies free-form operation names or raw UI target IDs. The text key is a separate string enum of the host's nonblank keys plus an empty string for no input; local validation also checks its compatibility with the chosen operation. The empty-string marker maps to `null` in `Decision`.
+
+Requests use DeepSeek's official `https://api.deepseek.com/beta/chat/completions` endpoint with thinking disabled and a forced function choice, following its [strict tool-call guide](https://api-docs.deepseek.com/guides/tool_calls/). The key still goes only to the same DeepSeek host. A function call is parsed as a local model decision; no remote tool is executed. Local validation, the host gate, and fresh-screen checks remain required. Invalid decisions can receive at most one correction request; HTTP/network errors, refusals, and content filtering remain terminal. A live call through this endpoint succeeded on one DeepSeek account and Samsung device on 2026-09-21, as detailed below; other account or model combinations remain unverified.
+
+The DeepSeek candidate catalog also adds bounded visible descendant text to actionable containers, so a clickable video card can expose its title in the candidate description. It does not synthesize click support for a non-actionable child. This improves candidate descriptions without claiming that it reproduces the user's exact invalid selection.
+
+### Version 0.3.4 verification status
+
+All **129 offline tests passed**: 29 core, 92 SDK, and 8 sample tests, with no failures, errors, or skips. The SDK total includes 35 strict DeepSeek protocol tests, 12 candidate-catalog tests, and 7 decision-correction tests. They cover the strict function schema, snapshot-bound action-ID mapping, invalid or multiple function calls, input-key compatibility, immutable candidate bindings, bounded descendant descriptions, terminal failures, and at most one correction request. These tests use fixture responses, not a real DeepSeek API key.
+
+The release AAR, demo APK, instrumented test APK, and both local Maven publications built successfully at version 0.3.4. Lint reported 0 errors with 6 SDK warnings and 35 sample warnings; the build is not warning-free.
+
+The installed 0.3.4 demo passed **2 Samsung device smoke tests, 0 failures**, in 6.364 seconds: observing and saving text through the real accessibility fixture, and refreshing a changed UI before exactly one Save click. These use deterministic providers. The test APK was removed afterward, demo versionCode 7 / versionName 0.3.4 was verified, and the original accessibility-service list including Bixby was restored with the Jev service bound. The Samsung long-press setting remained at its original value of `1`.
+
+The source archive, local Maven archive, and APK packages passed checks for excluded local configuration and caches, expected artifact contents, executable `gradlew` permissions in the source archive, SHA-256 hashes, and packaged APK equality with the built APK. The version 0.3.2 seven-test run below remains the prior broader device baseline.
+
+### Version 0.3.4 live DeepSeek checks
+
+On 2026-09-21, the user entered a DeepSeek API key directly in the Samsung demo. The key was not read or recorded by the validation operator. The live Bilibili `search testv` preset completed its model decision loop with **5 accepted actions**, **3 fresh-screen refreshes before dispatch**, and no response rejection. Its final `DONE` decision produced `UNVERIFIED`, as expected for a scenario without an independent outcome verifier.
+
+ADB UI inspection showed a TESTV official-channel video detail page. The exact first-result ordering was not independently recorded, and no Bilibili triple action was tested. This run establishes that the strict beta endpoint and the search/video-opening flow worked for this account, device, and run; it does not establish a general success rate or verify the triple-action preset.
+
+A second live DeepSeek run used **Built-in: save text**. `SET_TEXT` and `CLICK` both returned `accepted=true`; the final `DONE` decision produced `VERIFIED: Outcome verified`. The fixture was independently observed displaying `Saved: Hello Jev`. Both live runs completed without a protocol rejection. Unlike the Bilibili preset, the built-in scenario supplies an `OutcomeVerifier` that checks the saved value.
 
 ## Version 0.3.3 DeepSeek response handling
 
@@ -18,7 +46,7 @@ The release AAR, demo APK, instrumented test APK, and both local Maven publicati
 
 The installed 0.3.3 demo passed **3 Samsung device smoke tests, 0 failures**, in 7.480 seconds: scenario selection, delayed text entry and Save, and a changed target requiring a new decision before exactly one Save click. These use deterministic providers; they do not exercise a live DeepSeek response or Bilibili triple action. The Samsung long-press setting remained `1` throughout this run. Afterward the test APK was removed, demo versionCode 6 / versionName 0.3.3 was verified, and the original accessibility-service list (including Bixby) was restored with the Jev service bound.
 
-The version 0.3.2 seven-test run below remains the prior broader device baseline. The user's original parser failure has not been reproduced with its actual raw response; live DeepSeek/Bilibili completion is still unverified.
+The version 0.3.2 seven-test run below remains the prior broader device baseline. The user's original parser failure was not reproduced with its actual raw response; live DeepSeek/Bilibili completion had not been verified at the time of the 0.3.3 checks.
 
 ## Version 0.3.2 launch-transition regression
 
@@ -103,11 +131,11 @@ Device tests use a **deterministic `DecisionProvider`** and execute real Android
 
 ## Not yet verified
 
-- No model API credentials were used in automated validation. Live Jev and DeepSeek responses, account/model availability, Chinese-language accuracy, model latency, and billing have not been independently verified.
-- Bilibili search and triple-action presets have not been validated end to end. They have no independent outcome verifier; provider-reported completion is `UNVERIFIED`.
+- Offline unit tests and instrumented smoke tests use fixture responses or deterministic providers. The separate 0.3.4 live DeepSeek checks above used one user-configured account; live Jev responses, other account/model combinations, general Chinese-language accuracy, model latency, and billing remain unverified.
+- A live Bilibili search run reached a TESTV video detail page, but exact first-result ordering was not independently recorded. The triple-action preset remains untested. Both presets have no independent outcome verifier; provider-reported completion is `UNVERIFIED`.
 - macOS setup instructions are included, but the project has not been built or run on a Mac in this validation session.
 - Physical Xiaomi testing has not been performed. HyperOS permissions, background behavior, and third-party app task success rates have not been verified.
-- Android version coverage is incomplete. API 26 is the declared minimum; completed device tests cover API 36 for versions 0.3.1 and 0.3.2, and API 33 for the earlier baseline. Version 0.3.3 device verification is pending.
+- Android version coverage is incomplete. API 26 is the declared minimum; completed device tests cover API 36 for versions 0.3.1 through 0.3.4, and API 33 for the earlier baseline.
 - SDK artifacts have not been published to Maven Central or an app store. The source is MIT-licensed; the artifact and group coordinates currently exist only in the local Maven distribution.
 
 ## Local reports
@@ -115,7 +143,9 @@ Device tests use a **deterministic `DecisionProvider`** and execute real Android
 - `core/build/reports/tests/test/index.html`
 - `sdk/build/reports/tests/testDebugUnitTest/index.html`
 - `sample/build/reports/tests/testDebugUnitTest/index.html`
-- `sample/build/reports/samsung-smoke-0.3.3.txt` (current three-test device smoke result)
+- `sample/build/reports/deepseek-live-0.3.4.txt` (sanitized live DeepSeek check record)
+- `sample/build/reports/samsung-smoke-0.3.4.txt` (current two-test device smoke result)
+- `sample/build/reports/samsung-smoke-0.3.3.txt` (previous three-test device smoke result)
 - `sample/build/reports/deepseek-delay-regression-before-0.3.1.txt` (delayed save-text failure on 0.3.0)
 - `sample/build/reports/deepseek-delay-regression-after-0.3.1.txt` (same delayed save-text test passing on 0.3.1)
 - `sample/build/reports/launch-refresh-regression-0.3.2.txt` (two focused regression tests)

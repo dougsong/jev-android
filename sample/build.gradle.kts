@@ -3,7 +3,7 @@ android {
     namespace = "io.github.jevandroid.sample"
     compileSdk = 36
     defaultConfig {
-        applicationId = "io.github.jevandroid.sample"; minSdk = 26; targetSdk = 36; versionCode = 6; versionName = "0.3.3"
+        applicationId = "io.github.jevandroid.sample"; minSdk = 26; targetSdk = 36; versionCode = 7; versionName = "0.3.4"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }

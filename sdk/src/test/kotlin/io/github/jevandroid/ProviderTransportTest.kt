@@ -31,9 +31,16 @@ class ProviderTransportTest {
     @After fun stopServer() { server.shutdown() }
 
     private fun request() = Request.Builder().url(server.url("/request")).header("Authorization", "Bearer test-key").build()
-    private fun response() = JSONObject().put("choices", JSONArray().put(JSONObject().put("finish_reason", "stop")
-        .put("message", JSONObject().put("role", "assistant")
-            .put("content", "{\"operation\":\"WAIT\",\"target\":null,\"text_key\":null,\"confidence\":0.8}")))).toString()
+    private fun response(): String {
+        val choices = DeepSeekChoices.create(task, snapshot)
+        val arguments = JSONObject().put("action_id", choices.actions.entries.single { it.value.operation == Operation.WAIT }.key)
+            .put("text_key", "").put("confidence", 0.8)
+        val call = JSONObject().put("id", "call_fixture").put("type", "function")
+            .put("function", JSONObject().put("name", "select_action").put("arguments", arguments.toString()))
+        return JSONObject().put("choices", JSONArray().put(JSONObject().put("finish_reason", "tool_calls")
+            .put("message", JSONObject().put("role", "assistant").put("content", JSONObject.NULL)
+                .put("tool_calls", JSONArray().put(call))))).toString()
+    }
 
     private suspend fun fails(expected: String, action: suspend () -> Unit) {
         try { action(); fail("Expected failure") } catch (e: IOException) {
@@ -57,7 +64,7 @@ class ProviderTransportTest {
         }
     }
 
-    @Test fun deepSeekProviderSendsBearerJsonAndParsesDecision() = runBlocking {
+    @Test fun deepSeekProviderSendsBearerAndParsesStrictSelection() = runBlocking {
         server.enqueue(MockResponse().setBody(response()))
         val provider = DeepSeekProvider("fixture-key", "fixture-model", ProviderTransport(), server.url("/chat/completions").toString())
         assertEquals(Decision(Operation.WAIT, confidence = 0.8), provider.decide(task, snapshot, emptyList()))
@@ -68,6 +75,7 @@ class ProviderTransportTest {
         assertTrue(received.getHeader("Content-Type")!!.startsWith("application/json"))
         val payload = received.body.readUtf8()
         assertEquals("fixture-model", JSONObject(payload).getString("model"))
+        assertTrue(JSONObject(payload).getJSONArray("tools").getJSONObject(0).getJSONObject("function").getBoolean("strict"))
         assertFalse(payload.contains("fixture-key"))
     }
 

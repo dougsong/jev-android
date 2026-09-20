@@ -21,12 +21,22 @@ class DeepSeekRepairTest {
     private val snapshot = UiSnapshot("v1", "test.app", listOf(
         Element("0.1", "Save", "Button", "Save", null, setOf(Operation.CLICK)),
     ))
-    private val valid = """{"operation":"CLICK","target":"0.1","text_key":null,"confidence":0.9}"""
-    private val done = """{"operation":"DONE","target":null,"text_key":null,"confidence":0.9}"""
+    private val choices = DeepSeekChoices.create(task, snapshot)
+    private fun selection(operation: Operation): String = JSONObject()
+        .put("action_id", choices.actions.entries.single { it.value.operation == operation }.key)
+        .put("text_key", "").put("confidence", 0.9).toString()
+    private val valid = selection(Operation.CLICK)
+    private val done = selection(Operation.DONE)
 
-    private fun envelope(content: String, finish: String = "stop", refusal: String? = null): String = JSONObject()
-        .put("choices", JSONArray().put(JSONObject().put("finish_reason", finish).put("message", JSONObject()
-            .put("role", "assistant").put("content", content).apply { refusal?.let { put("refusal", it) } }))).toString()
+    private fun envelope(content: String, finish: String = "tool_calls", refusal: String? = null): String {
+        val call = JSONObject().put("id", "call_fixture").put("type", "function")
+            .put("function", JSONObject().put("name", "select_action").put("arguments", content))
+        val message = JSONObject().put("role", "assistant").put("content", JSONObject.NULL)
+            .put("tool_calls", JSONArray().put(call))
+        refusal?.let { message.put("refusal", it) }
+        return JSONObject().put("choices", JSONArray().put(JSONObject().put("finish_reason", finish)
+            .put("message", message))).toString()
+    }
 
     private fun provider(calls: ScriptedCalls) = DeepSeekProvider("fixture-key", "fixture-model",
         ProviderTransport(calls), "https://example.invalid/chat/completions")
@@ -63,7 +73,7 @@ class DeepSeekRepairTest {
 
     @Test fun twoInvalidResponsesStopWithSpecificSanitizedReason() = runBlocking {
         val calls = ScriptedCalls(listOf(Reply(envelope("private-invalid-model-output")),
-            Reply(envelope(JSONObject(valid).put("target", "private-invented-target").toString()))))
+            Reply(envelope(JSONObject(valid).put("action_id", "private-invented-target").toString()))))
         try { provider(calls).decide(task, snapshot, emptyList()); fail("Expected rejection") }
         catch (error: DeepSeekResponseException) {
             assertEquals(DeepSeekRejectionReason.INVALID_TARGET, error.reason)
@@ -117,7 +127,7 @@ class DeepSeekRepairTest {
     }
 
     @Test fun noUiActionIsSentUntilTheCorrectedDecisionPassesValidation() = runBlocking {
-        val calls = ScriptedCalls(listOf(Reply(envelope(JSONObject(valid).put("target", "not-a-candidate").toString())),
+        val calls = ScriptedCalls(listOf(Reply(envelope(JSONObject(valid).put("action_id", "not-a-candidate").toString())),
             Reply(envelope(valid)), Reply(envelope(done))))
         var mutations = 0
         val runtime = object : DeviceRuntime {

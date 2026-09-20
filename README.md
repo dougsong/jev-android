@@ -8,7 +8,8 @@ The API is still unstable. The project is not published to Maven Central; the de
 
 ## Features and limitations
 
-- Builds a dynamic action table from accessible controls. Jev selects an operation and its targets through multiple questions in one request; DeepSeek selects an action through JSON output. Both use the same execution loop and guards.
+- Builds a dynamic action table from accessible controls. Jev selects an operation and its targets through multiple questions in one request; DeepSeek chooses an enumerated action through a strict `select_action` function schema. Both use the same execution loop and guards.
+- Adds bounded descendant text to DeepSeek's actionable container descriptions, so a clickable card can include its visible title without turning a non-actionable text child into a clickable target.
 - Supports clicking, long-pressing accessible controls, replacing text field contents, scrolling forward or backward, going back, launching allowed apps, waiting, and reporting completion or a blocked task.
 - `Operation.LONG_CLICK` invokes a control's advertised Android `ACTION_LONG_CLICK` action. `Operation.LONG_PRESS` holds a touch at the center of a currently observed, visible, actionable control. The host controls the hold duration through `Task.longPressDurationMillis` (default 2,000 ms; allowed range 500–5,000 ms); the model cannot supply coordinates or a duration.
 - Neither backend generates arbitrary input text in this SDK. `Task.textValues` supplies named, exact candidate values for the selected model to choose from. Only the selected provider's API key is required.
@@ -39,11 +40,13 @@ The execution loop reads controls, builds valid choices, asks the selected provi
 | Jev (TypeSafe) | `JevProvider` | TypeSafe API key | `jev-latest` |
 | DeepSeek | `DeepSeekProvider` | DeepSeek API key | `deepseek-flash` |
 
-DeepSeek calls `https://api.deepseek.com/chat/completions` with JSON mode and thinking disabled to reduce decision latency. The model chooses among the current screen's allowed actions and supplied text values; this is UI decision support, not a separate text-generation stage. Both providers accept a custom `model` value. Choose a model available to your account that supports the provider's request format. See the [DeepSeek API reference](https://api-docs.deepseek.com/api/create-chat-completion/).
+DeepSeek calls `https://api.deepseek.com/beta/chat/completions` with thinking disabled and a forced, strict `select_action` function. Each request enumerates the currently allowed `action_id` values; each ID maps locally to a specific operation and target. The model supplies only `action_id`, `text_key`, and `confidence`, rather than generating operation names or raw UI target IDs. The SDK accepts exactly one call to this named function and validates its arguments locally before considering a UI action. The function call represents a decision; it does not execute a remote tool. See the official [DeepSeek strict tool-call guide](https://api-docs.deepseek.com/guides/tool_calls/). This beta endpoint worked with version 0.3.4 on one DeepSeek account and a Samsung phone on 2026-09-21; that result does not establish availability for every account or model. See [validation details](VALIDATION.md).
 
-DeepSeek has a 1,024-token response budget. An empty, truncated, or invalid decision can trigger one correction request before any UI action is submitted. The correction uses the same original snapshot and task context plus a fixed rejection reason; it does not include the malformed response. The corrected decision must pass the same strict validation, host policy, and fresh-screen checks. HTTP/network failures, refusals, content filtering, and tool calls are not retried. This addresses documented [JSON-mode output limitations](https://api-docs.deepseek.com/guides/json_mode/) without accepting arbitrary actions or targets.
+The `text_key` argument is a string enum containing the host's nonblank input keys and an empty string for no input. The SDK checks that a selected key is compatible with the chosen action; an input action cannot use an arbitrary text value. The internal empty-string marker becomes `null` in the resulting `Decision`.
 
-The shared confidence threshold has different meanings for the two backends. Jev provides probability distributions over the supplied choices; DeepSeek must return a self-reported confidence value in its JSON response. DeepSeek's value is not calibrated or directly comparable to Jev's probabilities, and neither is proof that an action is correct. Use host policies and outcome verification for decisions that require stronger assurance.
+DeepSeek has a 1,024-token response budget. An empty, truncated, or invalid decision can trigger one correction request before any UI action is submitted. The correction uses the same original snapshot and task context plus a fixed rejection reason; it does not include the malformed response. The corrected decision must pass the same strict validation, host policy, and fresh-screen checks. HTTP/network failures, refusals, and content filtering are not retried. Both providers accept a custom `model` value; choose a model available to your account that supports the selected provider's request format.
+
+The shared confidence threshold has different meanings for the two backends. Jev provides probability distributions over the supplied choices; DeepSeek must return a self-reported confidence value in its function arguments. DeepSeek's value is not calibrated or directly comparable to Jev's probabilities, and neither is proof that an action is correct. Use host policies and outcome verification for decisions that require stronger assurance.
 
 ## Build
 
@@ -141,7 +144,7 @@ Adjust the JDK path for your installation. The script preserves the original pro
 
 - `sample/build/outputs/apk/debug/sample-debug.apk`
 - `sdk/build/outputs/aar/sdk-release.aar`
-- `core/build/libs/core-0.3.3.jar`
+- `core/build/libs/core-0.3.4.jar`
 
 **The AAR does not bundle all dependencies.** The SDK also depends on the core module, coroutines, OkHttp, and Gson. Use one of the source-module or Maven integration options below.
 
@@ -173,7 +176,7 @@ maven { url = uri("vendor/jev-maven") }
 Add these dependencies to the host app:
 
 ```kotlin
-implementation("io.github.jevandroid:jev-android:0.3.3")
+implementation("io.github.jevandroid:jev-android:0.3.4")
 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 ```
 
@@ -256,7 +259,7 @@ val job = service.start(
 )
 ```
 
-The main-thread, cancellation, and verification requirements are the same for both providers. This DeepSeek example also demonstrates the API only; live DeepSeek task execution has not yet been validated.
+The main-thread, cancellation, and verification requirements are the same for both providers. This code demonstrates the API. On 2026-09-21, a live DeepSeek run of **Built-in: save text** returned `VERIFIED` and displayed `Saved: Hello Jev`. A separate run of the Bilibili `testv` search preset reached a TESTV video detail page; its completion status was `UNVERIFIED` because the preset has no independent outcome verifier. See [validation details](VALIDATION.md).
 
 An `OutcomeVerifier` receives a fresh `UiSnapshot` and can check the specific business result. The sample checks the saved value or long-press result displayed on its test screen. If the verifier returns false, the result is `UNVERIFIED`.
 
@@ -294,7 +297,7 @@ The Bilibili presets target the mainland Android app and are example task instru
 
 - Only visible controls from allowlisted apps are read. For other screens, the snapshot contains only the foreground package name and the list of apps the task may launch.
 - Password nodes and their subtrees are skipped. This is not comprehensive personal-data redaction: other visible text in allowed apps may contain private information. Screen information, the task goal, input candidates, and task history are sent to the selected provider.
-- No screenshots are uploaded. Each provider sends its API key only to its own fixed endpoint: Jev uses `https://api.typesafe.ai/v1/systemone`; DeepSeek uses `https://api.deepseek.com/chat/completions`. Redirects and automatic connection retries are disabled. Selecting one provider does not call the other provider.
+- No screenshots are uploaded. Each provider sends its API key only to its own fixed endpoint: Jev uses `https://api.typesafe.ai/v1/systemone`; DeepSeek uses `https://api.deepseek.com/beta/chat/completions`. Redirects and automatic connection retries are disabled. Selecting one provider does not call the other provider.
 - A snapshot contains at most 220 elements, and node traversal is bounded. Long screens require scrolling. Controls omitted by truncation are not offered to either model.
 - The sample keeps separate keys for Jev and DeepSeek only in memory; switching providers does not reuse the other provider's key. Keys are not persisted or backed up. Screenshots are disabled on the configuration screen. The SDK does not manage host credentials. Apps distributed to other users should use user-supplied keys or a controlled backend.
 - HTTP, protocol, and runtime exceptions reach `onError`. DeepSeek response rejections include a sanitized reason code (such as `EMPTY_CONTENT`, `TRUNCATED`, or `INVALID_TARGET`) and attempt count, without raw response content or a nested parser error. One permitted decision correction is separate from HTTP retries and does not replay a UI action. Cancellation follows coroutine cancellation semantics and is not returned as success.
@@ -303,7 +306,7 @@ The Bilibili presets target the mainland Android app and are example task instru
 
 ## Tests and future work
 
-Offline tests cover cancellation, timeouts, step limits, allowlists, invalid targets, input-value restrictions, outcome verification, low confidence, stopping without resubmitting a failed action, and Jev response distribution and branch validation. DeepSeek tests cover malformed or truncated responses, invalid action choices, bounded decision correction, sanitized rejection reasons, HTTP status handling, response-size limits, and transport cancellation. Long-press tests check action eligibility and provider decisions; sample tests cover scenario configuration and provider-key isolation when switching backends. Provider responses and HTTP behavior are tested with offline fixtures and mocks, not live API calls. Android builds and lint do not establish real-device task success. See [VALIDATION.md](VALIDATION.md) for the current validation status.
+Offline tests cover cancellation, timeouts, step limits, allowlists, invalid targets, input-value restrictions, outcome verification, low confidence, stopping without resubmitting a failed action, and Jev response distribution and branch validation. DeepSeek tests cover the strict function schema, action-ID mapping, invalid function calls or arguments, malformed or truncated responses, bounded decision correction, sanitized rejection reasons, HTTP status handling, response-size limits, and transport cancellation. Long-press tests check action eligibility and provider decisions; sample tests cover scenario configuration and provider-key isolation when switching backends. Provider responses and HTTP behavior are tested with offline fixtures and mocks, not live API calls. Android builds and lint do not establish real-device task success. See [VALIDATION.md](VALIDATION.md) for the current validation status.
 
 The `:sample:connectedDebugAndroidTest` task uses a deterministic decision provider on a connected emulator or test device. It checks real accessibility reads, text entry, clicking, long-pressing, result verification, app launch completion, stale-screen refreshes, and allowlist enforcement. Tests temporarily enable the service and restore the previous accessibility settings afterward. Run them only on a dedicated test device. These automated results do not call Jev or DeepSeek or establish live API availability or real-model success rates.
 
