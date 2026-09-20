@@ -1,6 +1,30 @@
 # Validation record
 
-Date: 2026-09-21. This record covers version 0.3.5, with earlier device and regression results retained under their version labels.
+Date: 2026-09-21. This record covers version 0.3.6, with earlier device and regression results retained under their version labels.
+
+## Version 0.3.6 configurable hold duration
+
+After entering a key in version 0.3.5, the user reported that the hold looked too short and the triple action still failed. The retained trace selected the unique `frame_like` control, recorded one `LONG_PRESS` with `accepted=true`, waited three times, and returned `BLOCKED` because all three controls remained unchecked. The one-hold policy worked in this run, and no Stop cancellation was recorded. The configured duration was the SDK default of 2,000 ms. These observations do not establish that a two-second duration alone caused the failure, or measure how long Bilibili actually received the touch.
+
+Version 0.3.6 gives the Bilibili triple-action preset a 4,000 ms default and exposes an editable **Hold duration (milliseconds)** field accepting whole milliseconds from 500 to 5,000. The sample validates this field before requesting a model decision and passes its value into `Task.longPressDurationMillis`. The SDK and built-in local hold defaults remain 2,000 ms. The task goal uses the configured duration, but its prose is not the gesture configuration. The triple-action log records the requested duration, for example `requested=4000 ms`; this is a configuration diagnostic, not proof of touch delivery or Bilibili completion. The one-hold policy and three-control outcome check are unchanged.
+
+### Version 0.3.6 verification status
+
+All **149 offline tests passed**: 29 core, 94 SDK, and 26 sample tests, with no failures, errors, or skips. The release AAR, demo APK, instrumented test APK, and both local Maven publications built successfully at version 0.3.6. The full build completed in 21 seconds. Lint reported 0 errors with 6 SDK warnings and 37 sample warnings; the build is not warning-free.
+
+The installed 0.3.6 demo passed **2 Samsung device tests, 0 failures**, in 8.769 seconds. The scenario-field test checked that the Bilibili triple-action preset selects 4,000 ms and Custom task selects 2,000 ms. The local hold fixture requested 4,000 ms and measured **4,000 ms from touch-down to touch-up**, with exactly one completed hold. This establishes four-second touch delivery to the local fixture under the condition below; it does not establish delivery or successful triple action in Bilibili.
+
+For the local hold measurement only, the Samsung secure setting `otch_long_press_enabled_setting` was temporarily changed from `1` to `0` under the owner's earlier permission. It was restored to `1` in a `finally` block and read back to verify restoration. The test APK was removed afterward, installed versionCode 9 / versionName 0.3.6 was verified, and the exact original accessibility-service list including Bixby was restored with the Jev service bound.
+
+The version 0.3.6 source, local Maven, and APK packages passed configuration/cache exclusion, expected artifact and source content, executable wrapper permission, SHA-256, and built-versus-packaged APK checks. A credential-pattern scan found no matching secrets in tracked or publishable source files.
+
+### Version 0.3.6 live DeepSeek triple-action check
+
+On 2026-09-21, after the user entered their key directly in the updated demo, the full Bilibili triple-action preset completed with **`VERIFIED`**. The key remained in app memory and was not inspected or recorded. Four navigation actions (`CLICK`, `SET_TEXT`, `CLICK`, `CLICK`) were accepted, followed by exactly one accepted `LONG_PRESS` configured for **4,000 ms**. The next observation reported Like, Coin, and Favorite all selected; the local policy returned `DONE` with confidence 1, and the independent outcome verifier passed. No additional hold or post-hold `WAIT` was needed, and no provider protocol rejection occurred.
+
+The run made six fresh-screen refreshes before dispatch: three initially, one before text entry, and one before each of two later clicks. Those stale decisions were rejected before submission and did not replay a submitted action. After the stop overlay disappeared and before returning to the demo, independent ADB UI inspection found the video detail title `购买iPhone18 Pro的一天【BB Time第521期】` and confirmed `frame_like`, `frame_coin`, and `frame_fav` each had `checked=true`.
+
+The Samsung long-press setting remained at its original value of **`1` throughout this live Bilibili run**; the temporary setting change described above applied only to the local measurement fixture. This run verifies the three visible selected states on the same observed video page. It does not independently establish the first search result's ordering, the exact coin amount or backend transaction, or a general success rate. The four-second physical measurement comes from the separate local fixture, not from Bilibili's touch events.
 
 ## Version 0.3.5 Bilibili triple-action policy and cancellation diagnostics
 
@@ -24,7 +48,7 @@ The test APK was removed afterward, and installed versionCode 8 / versionName 0.
 
 The version 0.3.5 source, local Maven, and APK packages passed configuration/cache exclusion, expected artifact and source content, executable wrapper permission, SHA-256, and built-versus-packaged APK checks. A credential-pattern scan found no matching secrets in tracked or publishable source files.
 
-Version 0.3.5 live API validation is pending a user-entered key. A successful real-account Bilibili triple action has not been verified. The four post-hold observations currently span roughly two seconds; slower UI updates can conservatively stop the task without another interaction. Inspect the final app state before starting a new run. The version 0.3.4 live search and Save-text results below remain evidence for those flows only.
+The later version 0.3.5 live triple-action attempt recorded one accepted hold and then conservatively returned `BLOCKED` with all three controls unchecked, as detailed in the version 0.3.6 investigation above. A successful real-account Bilibili triple action was not verified on version 0.3.5. The four post-hold observations span roughly two seconds; slower UI updates can conservatively stop the task without another interaction. Inspect the final app state before starting a new run. The version 0.3.4 live search and Save-text results below remain evidence for those flows only.
 
 ## Version 0.3.4 bounded DeepSeek action selection
 
@@ -155,11 +179,11 @@ Device tests use a **deterministic `DecisionProvider`** and execute real Android
 
 ## Not yet verified
 
-- Offline unit tests and instrumented smoke tests use fixture responses or deterministic providers. The separate 0.3.4 live DeepSeek checks above used one user-configured account; live Jev responses, other account/model combinations, general Chinese-language accuracy, model latency, and billing remain unverified.
-- A live Bilibili search run reached a TESTV video detail page, but exact first-result ordering was not independently recorded. The triple-action preset remains untested. Both presets have no independent outcome verifier; provider-reported completion is `UNVERIFIED`.
+- Offline unit tests and instrumented smoke tests use fixture responses or deterministic providers. The separate 0.3.4 and 0.3.6 live DeepSeek checks above used one user-configured account; live Jev responses, other account/model combinations, general Chinese-language accuracy, model latency, and billing remain unverified.
+- Live Bilibili runs reached a TESTV video detail page and, on version 0.3.6, verified the three selected controls after one configured four-second hold. Exact first-result ordering, backend coin amount or transaction, and a general success rate remain unverified. The search preset still has no independent outcome verifier and returns `UNVERIFIED`; the triple-action preset now verifies its visible final state.
 - macOS setup instructions are included, but the project has not been built or run on a Mac in this validation session.
 - Physical Xiaomi testing has not been performed. HyperOS permissions, background behavior, and third-party app task success rates have not been verified.
-- Android version coverage is incomplete. API 26 is the declared minimum; completed device tests cover API 36 for versions 0.3.1 through 0.3.4, and API 33 for the earlier baseline.
+- Android version coverage is incomplete. API 26 is the declared minimum; completed device tests cover API 36 for versions 0.3.1 through 0.3.6, and API 33 for the earlier baseline.
 - SDK artifacts have not been published to Maven Central or an app store. The source is MIT-licensed; the artifact and group coordinates currently exist only in the local Maven distribution.
 
 ## Local reports
@@ -167,8 +191,12 @@ Device tests use a **deterministic `DecisionProvider`** and execute real Android
 - `core/build/reports/tests/test/index.html`
 - `sdk/build/reports/tests/testDebugUnitTest/index.html`
 - `sample/build/reports/tests/testDebugUnitTest/index.html`
+- `sample/build/reports/deepseek-triple-live-0.3.6.txt` (sanitized successful live DeepSeek triple-action check)
+- `sample/build/reports/samsung-hold-0.3.6.txt` (current two-test result, including the measured four-second local hold)
+- `sample/build/reports/deepseek-triple-live-0.3.5.txt` (previous accepted two-second hold followed by a blocked outcome)
+- `sample/build/reports/samsung-smoke-0.3.5.txt` (previous three-test device smoke result)
 - `sample/build/reports/deepseek-live-0.3.4.txt` (sanitized live DeepSeek check record)
-- `sample/build/reports/samsung-smoke-0.3.4.txt` (current two-test device smoke result)
+- `sample/build/reports/samsung-smoke-0.3.4.txt` (previous two-test device smoke result)
 - `sample/build/reports/samsung-smoke-0.3.3.txt` (previous three-test device smoke result)
 - `sample/build/reports/deepseek-delay-regression-before-0.3.1.txt` (delayed save-text failure on 0.3.0)
 - `sample/build/reports/deepseek-delay-regression-after-0.3.1.txt` (same delayed save-text test passing on 0.3.1)

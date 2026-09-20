@@ -16,7 +16,7 @@ internal class BilibiliTriplePolicy(
         private fun state(element: Element) = if (element.checked == true) "checked" else "unchecked"
     }
 
-    private data class HoldContext(val target: String, val title: String)
+    private data class HoldContext(val target: String, val title: String, val durationMillis: Long)
     private data class Attempt(val context: HoldContext?, val accepted: Boolean)
 
     private var pending: HoldContext? = null
@@ -77,7 +77,7 @@ internal class BilibiliTriplePolicy(
             return deny("Some triple-action controls are already selected (${controls.describe()}). No hold was sent, to avoid undoing or spending again.")
         val title = videoTitle(snapshot)
             ?: return deny("The current video title could not be identified uniquely. No hold was sent.")
-        pending = HoldContext(controls.like.id, title)
+        pending = HoldContext(controls.like.id, title, task.longPressDurationMillis)
         explanation = null
         return true
     }
@@ -90,7 +90,7 @@ internal class BilibiliTriplePolicy(
         if (attempt == null) attempt = Attempt(context, event.record.accepted)
         pending = null
         return if (context != null)
-            "Bilibili hold target: Like (frame_like); Android accepted=${event.record.accepted}. Checking Like, Coin, and Favorite on the same video; no repeat is allowed."
+            "Bilibili hold target: Like (frame_like); requested=${context.durationMillis} ms; Android accepted=${event.record.accepted}. Checking Like, Coin, and Favorite on the same video; no repeat is allowed."
         else "A timed hold was recorded without a confirmed Like target. Further interactions are blocked."
     }
 

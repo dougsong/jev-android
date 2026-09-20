@@ -146,7 +146,7 @@ Adjust the JDK path for your installation. The script preserves the original pro
 
 - `sample/build/outputs/apk/debug/sample-debug.apk`
 - `sdk/build/outputs/aar/sdk-release.aar`
-- `core/build/libs/core-0.3.5.jar`
+- `core/build/libs/core-0.3.6.jar`
 
 **The AAR does not bundle all dependencies.** The SDK also depends on the core module, coroutines, OkHttp, and Gson. Use one of the source-module or Maven integration options below.
 
@@ -178,7 +178,7 @@ maven { url = uri("vendor/jev-maven") }
 Add these dependencies to the host app:
 
 ```kotlin
-implementation("io.github.jevandroid:jev-android:0.3.5")
+implementation("io.github.jevandroid:jev-android:0.3.6")
 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 ```
 
@@ -275,7 +275,7 @@ Implement `DecisionProvider` to use another model, or implement `DeviceRuntime` 
 2. Enable the accessibility service in system settings. Menus and restrictions vary between Android versions and vendors, including Xiaomi HyperOS and Samsung One UI; follow the controls available on your device.
 3. Select **Built-in: save text**, then tap **Run selected task**. Keep the device unlocked. The task should enter `Hello Jev`, click `Save`, and verify that `Saved: Hello Jev` appears. Use **Built-in: long press** to try a timed press-and-hold on the test control.
 4. Use `Stop Jev` in the upper-right corner to stop execution. Return to the sample's main screen to inspect the result. Only `VERIFIED` indicates that the local outcome check passed.
-5. Choose another scenario or **Custom task**, review its goal, allowed packages, and input candidates, then tap **Run selected task**. The overlay button can cover controls near the top of the screen; avoid controls under it in this release.
+5. Choose another scenario or **Custom task**, review its goal, allowed packages, input candidates, and hold duration, then tap **Run selected task**. The overlay button can cover controls near the top of the screen; avoid controls under it in this release.
 
 Automation uses the current foreground interface. You cannot simultaneously use other apps manually. System permissions, sign-in, and inaccessible controls require manual handling.
 
@@ -283,17 +283,19 @@ On a Samsung SM-F9460 running Android 16, the system component `com.samsung.andr
 
 ### Available scenarios
 
-Selecting a scenario fills the task, package allowlist, and input candidates; these fields remain editable. Selection does not start automation. **Run selected task** opens the local test screen for built-in scenarios or starts the selected external-app task. Provider selection and API keys are independent of the scenario.
+Selecting a scenario fills the task, package allowlist, input candidates, and hold duration; these fields remain editable. Selection does not start automation. **Run selected task** opens the local test screen for built-in scenarios or starts the selected external-app task. Provider selection and API keys are independent of the scenario.
+
+**Hold duration (milliseconds)** accepts whole milliseconds from 500 to 5,000. The Bilibili triple-action preset defaults to 4,000 ms; the built-in hold fixture and SDK default remain 2,000 ms. The sample passes the selected value into `Task.longPressDurationMillis` before requesting a model decision. Change this field to adjust the actual touch duration; changing only the goal's wording does not configure a longer gesture. The triple-action log records the requested duration, for example `requested=4000 ms`; this is the configured duration, not a measurement of uninterrupted touch delivery.
 
 | Scenario | Target | Behavior |
 |---|---|---|
 | **Built-in: save text** | Sample app | Enter `Hello Jev`, save it, and check the displayed result. |
-| **Built-in: long press** | Sample app | Hold the test control and check its visible result. |
+| **Built-in: long press** | Sample app | Hold the test control for two seconds by default and check its visible result. |
 | **Bilibili: search testv** | `tv.danmaku.bili` | Search for `testv`, skip ads and live streams, and open the first ordinary video. |
-| **Bilibili: search + triple action** | `tv.danmaku.bili` | Search for `testv`, open the first ordinary video, then hold Like once for two seconds to attempt the combined like, coin, and favorite action. |
+| **Bilibili: search + triple action** | `tv.danmaku.bili` | Search for `testv`, open the first ordinary video, then hold Like once for four seconds by default to attempt the combined like, coin, and favorite action. |
 | **Custom task** | User configuration | Start with blank fields and supply a goal, allowed packages, and exact input candidates. |
 
-The Bilibili presets target the mainland Android app. The search preset has no independent outcome verifier, so its completion claim returns `UNVERIFIED`. The triple-action preset can affect the signed-in account and spend Bilibili coins; successful completion on a real account has not yet been verified.
+The Bilibili presets target the mainland Android app. The search preset has no independent outcome verifier, so its completion claim returns `UNVERIFIED`. The triple-action preset can affect the signed-in account and spend Bilibili coins. On 2026-09-21, version 0.3.6 completed a live DeepSeek run on a Samsung SM-F9460: one hold configured for 4,000 ms was followed by all three controls reporting selected, and the local verifier returned `VERIFIED`. Independent UI inspection confirmed the three selected controls. The Samsung long-press setting remained enabled during this live run. This verifies the visible result for that run, not general compatibility or backend coin accounting; see [validation details](VALIDATION.md).
 
 The triple-action preset includes a local policy beyond its model instructions. It recognizes the exact `tv.danmaku.bili:id/frame_like`, `frame_coin`, and `frame_fav` controls on a video detail page, permits one timed hold on Like only when all three are unchecked, and rejects separate like, coin, or favorite actions. A hold consumes the allowance when an execution result is received; a stale decision rejected before dispatch does not consume it. After the hold, the policy checks up to four observations, with waits between them and no further interaction. Missing controls, existing selections, or an unsupported layout stop the attempt instead of guessing a replacement target.
 

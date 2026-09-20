@@ -200,6 +200,8 @@ class RuntimeInstrumentedTest {
 
     @Test(timeout = 30_000) fun performsTimedLongPressWithMeasuredTouchDuration() = withService { service ->
         val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val requestedDuration = InstrumentationRegistry.getArguments().getString("holdDurationMillis")
+            ?.toLong() ?: 2_000L
         val intent = Intent(context, FixtureActivity::class.java)
             .putExtra(FixtureActivity.EXTRA_KIND, FixtureKind.LONG_PRESS.name)
         ActivityScenario.launch<FixtureActivity>(intent).useWithExplicitFinish { scenario ->
@@ -221,7 +223,8 @@ class RuntimeInstrumentedTest {
             }
             runBlocking {
                 val runtime = AccessibilityRuntime(service)
-                val task = Task("Hold the fixture control", setOf(context.packageName))
+                val task = Task("Hold the fixture control", setOf(context.packageName),
+                    longPressDurationMillis = requestedDuration)
                 // An observed node can appear before the newly launched input window is ready.
                 awaitFixture(runtime, task, "Hold to confirm")
                 delay(800)
@@ -241,7 +244,11 @@ class RuntimeInstrumentedTest {
                     afterHold.elements.any { it.value == "Long press confirmed" })
                 val stats = afterHold.elements.first { it.value.startsWith("Completed holds: 1;") }.value
                 val elapsed = stats.substringAfter("duration: ").substringBefore(" ms").toLong()
-                assertTrue("Hold ended too early: $elapsed ms", elapsed >= 1_800)
+                assertTrue("Hold ended too early: $elapsed ms; requested=$requestedDuration ms", elapsed >= requestedDuration - 200)
+                assertTrue("Hold exceeded its bounded duration: $elapsed ms", elapsed <= requestedDuration + 1_000)
+                InstrumentationRegistry.getInstrumentation().sendStatus(0, android.os.Bundle().apply {
+                    putString("stream", "Measured hold: requested=$requestedDuration ms; actual=$elapsed ms; completed=1\n")
+                })
                 assertFalse(afterHold.elements.any { it.value == "A tap is not a long press" })
                 // The outcome changed the screen, so the old snapshot cannot dispatch another hold.
                 assertFalse(runtime.execute(task, before, Decision(Operation.LONG_PRESS, hold.id)))
@@ -365,6 +372,7 @@ class RuntimeInstrumentedTest {
                 val fields = all.filterIsInstance<EditText>().associateBy { it.hint.toString() }
                 assertEquals("tv.danmaku.bili", fields.getValue("Allowed package names, separated by commas").text.toString())
                 assertEquals("testv", fields.getValue("Input candidates for the model, one value per line").text.toString())
+                assertEquals("4000", fields.getValue("Hold duration (ms, 500-5000)").text.toString())
                 assertTrue(fields.getValue("Task").text.toString().contains("press and hold the Like button once"))
                 assertTrue(all.filterIsInstance<android.widget.TextView>().any { it.text.toString() == "Ready" })
                 all.filterIsInstance<Spinner>().single { it.contentDescription == "Scenario selector" }
@@ -376,6 +384,7 @@ class RuntimeInstrumentedTest {
                 assertEquals("", fields.getValue("Task").text.toString())
                 assertEquals("", fields.getValue("Allowed package names, separated by commas").text.toString())
                 assertEquals("", fields.getValue("Input candidates for the model, one value per line").text.toString())
+                assertEquals("2000", fields.getValue("Hold duration (ms, 500-5000)").text.toString())
             }
         }
     }

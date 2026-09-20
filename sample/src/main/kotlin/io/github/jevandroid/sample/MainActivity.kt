@@ -22,6 +22,7 @@ class MainActivity : Activity() {
     private lateinit var goal: EditText
     private lateinit var packages: EditText
     private lateinit var input: EditText
+    private lateinit var holdDuration: EditText
     private lateinit var scenarioPicker: Spinner
     private lateinit var scenarios: List<TaskScenario>
     private var preparing: Job? = null
@@ -32,7 +33,7 @@ class MainActivity : Activity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         val column = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(32, 32, 32, 32) }
         setContentView(ScrollView(this).apply { addView(column) })
-        column.addView(TextView(this).apply { text = "Jev Android SDK · 0.3.5"; textSize = 25f })
+        column.addView(TextView(this).apply { text = "Jev Android SDK · 0.3.6"; textSize = 25f })
         status = TextView(this).apply { text = "Ready"; textSize = 16f }
         column.addView(status)
         column.addView(TextView(this).apply { text = "Decision provider" })
@@ -65,11 +66,16 @@ class MainActivity : Activity() {
         goal = field("Task")
         packages = field("Allowed package names, separated by commas")
         input = field("Input candidates for the model, one value per line")
+        column.addView(TextView(this).apply { text = "Hold duration (milliseconds)" })
+        holdDuration = field("Hold duration (ms, 500-5000)").apply {
+            inputType = InputType.TYPE_CLASS_NUMBER
+        }
         fun fillScenario(scenario: TaskScenario) {
             scenarioDescription.text = scenario.description
             goal.setText(scenario.goal)
             packages.setText(scenario.packages.joinToString(","))
             input.setText(scenario.inputs.joinToString("\n"))
+            holdDuration.setText(scenario.longPressDurationMillis.toString())
         }
         fillScenario(scenarios.first())
         scenarioPicker.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
@@ -115,6 +121,13 @@ class MainActivity : Activity() {
         if (preparing?.isActive == true) return
         try {
             val scenario = scenarios[scenarioPicker.selectedItemPosition.coerceAtLeast(0)]
+            val holdDurationMillis = TaskScenarios.parseHoldDurationMillis(holdDuration.text.toString())
+            if (holdDurationMillis == null) {
+                holdDuration.error = "Enter a whole number from 500 to 5000 milliseconds."
+                append("Hold duration must be a whole number from 500 to 5000 milliseconds. No task started.")
+                return
+            }
+            holdDuration.error = null
             val allowedPackages = packages.text.toString().split(',').map { it.trim() }.filter { it.isNotEmpty() }.toSet()
             if (scenario.fixture != FixtureKind.NONE && allowedPackages != setOf(packageName)) {
                 append("Built-in scenarios require the demo package. Choose Custom task to use another app.")
@@ -135,7 +148,8 @@ class MainActivity : Activity() {
             val triplePolicy = if (scenario.id == "bilibili_triple") BilibiliTriplePolicy() else null
             val provider = triplePolicy?.provider(backendProvider) ?: backendProvider
             val values = input.text.toString().lines().filter { it.isNotEmpty() }.mapIndexed { i, value -> "value_$i" to value }.toMap()
-            val task = Task(goal.text.toString(), allowedPackages, values, timeoutMillis = scenario.timeoutMillis)
+            val task = scenario.createTask(goal.text.toString(), allowedPackages, values,
+                longPressDurationMillis = holdDurationMillis)
             val expected = values.values.firstOrNull().orEmpty()
             val expectedResult = when (scenario.fixture) {
                 FixtureKind.SAVE_TEXT -> "Saved: $expected"

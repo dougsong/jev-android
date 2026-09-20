@@ -91,6 +91,7 @@ class BilibiliTriplePolicyTest {
         assertTrue(policy.allow(task, snapshot(), hold))
         val message = executed(policy)
         assertTrue(message!!.contains("Like (frame_like)"))
+        assertTrue(message.contains("requested=2000 ms"))
         assertFalse(message.contains("A label"))
         assertFalse(policy.allow(task, snapshot(), hold))
     }

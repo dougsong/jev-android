@@ -146,7 +146,7 @@ Linux 使用 `./gradlew`。项目设置了 `android.overridePathCheck=true`，�
 
 - `sample/build/outputs/apk/debug/sample-debug.apk`
 - `sdk/build/outputs/aar/sdk-release.aar`
-- `core/build/libs/core-0.3.5.jar`
+- `core/build/libs/core-0.3.6.jar`
 
 **AAR 不包含全部依赖。** SDK 还依赖 core 模块、协程、OkHttp 和 Gson，建议按下面的源码模块或 Maven 方式接入。
 
@@ -178,7 +178,7 @@ maven { url = uri("vendor/jev-maven") }
 宿主 app 添加依赖：
 
 ```kotlin
-implementation("io.github.jevandroid:jev-android:0.3.5")
+implementation("io.github.jevandroid:jev-android:0.3.6")
 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 ```
 
@@ -275,7 +275,7 @@ val job = service.start(
 2. 在系统设置中开启无障碍服务。不同 Android 版本与厂商（包括小米 HyperOS、三星 One UI）的菜单和限制可能不同，请以实际设备为准。
 3. 选择 **Built-in: save text**，再点击 **Run selected task**，保持屏幕解锁。任务应输入 `Hello Jev`，点击 `Save`，并验证显示 `Saved: Hello Jev`。也可以选择 **Built-in: long press**，尝试在测试控件上执行定时按住操作。
 4. 点击右上角的 `Stop Jev` 可停止执行。返回示例主界面查看结果；只有 `VERIFIED` 表示通过了本地结果检查。
-5. 选择其他场景或 **Custom task**，检查任务、允许的包名和输入候选，再点击 **Run selected task**。悬浮按钮可能覆盖屏幕顶部的控件，当前版本需要避开其覆盖区域。
+5. 选择其他场景或 **Custom task**，检查任务、允许的包名、输入候选和按住时长，再点击 **Run selected task**。悬浮按钮可能覆盖屏幕顶部的控件，当前版本需要避开其覆盖区域。
 
 自动化使用当前前台界面，不能同时手动操作其他应用。系统授权、登录和无法读取的控件需要人工处理。
 
@@ -283,17 +283,19 @@ val job = service.start(
 
 ### 可选示例场景
 
-选择场景会自动填写任务、包名白名单和输入候选，填写后仍可编辑。仅选择场景不会执行操作；点击 **Run selected task** 后，内置场景会打开本地测试页面，其他场景则开始执行目标应用任务。后端选择和 API Key 与场景独立。
+选择场景会自动填写任务、包名白名单、输入候选和按住时长，填写后仍可编辑。仅选择场景不会执行操作；点击 **Run selected task** 后，内置场景会打开本地测试页面，其他场景则开始执行目标应用任务。后端选择和 API Key 与场景独立。
+
+**Hold duration (milliseconds)** 输入框接受 500–5,000 的整数毫秒。B 站三连预设默认 4,000 毫秒，内置长按测试和 SDK 默认值仍为 2,000 毫秒。示例会在请求模型决策前，将所选值传入 `Task.longPressDurationMillis`。调整实际触屏时长需要修改此输入框；仅在任务文字中写更长时间不会改变手势配置。三连动作日志会记录请求时长，例如 `requested=4000 ms`；这是配置时长，不是实际持续收到触摸的测量值。
 
 | 场景 | 目标 | 行为 |
 |---|---|---|
 | **Built-in: save text** | 示例 App | 输入 `Hello Jev`、保存，并检查显示的结果。 |
-| **Built-in: long press** | 示例 App | 按住测试控件，并检查可见结果。 |
+| **Built-in: long press** | 示例 App | 默认按住测试控件两秒，并检查可见结果。 |
 | **Bilibili: search testv** | `tv.danmaku.bili` | 搜索 `testv`，跳过广告和直播，打开第一个普通视频。 |
-| **Bilibili: search + triple action** | `tv.danmaku.bili` | 搜索 `testv`，打开第一个普通视频，再按住点赞按钮两秒一次，尝试完成一键三连。 |
+| **Bilibili: search + triple action** | `tv.danmaku.bili` | 搜索 `testv`，打开第一个普通视频，再按住点赞按钮一次，默认四秒，尝试完成一键三连。 |
 | **Custom task** | 用户配置 | 从空白字段开始，填写任务、允许的包名和准确的输入候选。 |
 
-B 站预设面向国内版 Android App。搜索预设没有独立结果验证器，模型声称完成时返回 `UNVERIFIED`。三连预设会影响当前登录账号，并可能消耗 B 站硬币；尚未验证其在真实账号上成功完成三连。
+B 站预设面向国内版 Android App。搜索预设没有独立结果验证器，模型声称完成时返回 `UNVERIFIED`。三连预设会影响当前登录账号，并可能消耗 B 站硬币。2026-09-21，0.3.6 在三星 SM-F9460 上使用真实 DeepSeek 完成一次运行：按配置执行一次 4,000 毫秒长按后，三个控件均报告已选中，本地验证器返回 `VERIFIED`，独立 UI 检查也确认了三项选中状态。这次真实运行期间，三星长按设置保持开启。该结果验证了这一次运行的可见状态，不代表通用兼容性或后端硬币账目已经核实；详见[验证记录](VALIDATION.md)。
 
 三连预设在模型指令之外加入了本地操作策略。它识别视频详情页上准确的 `tv.danmaku.bili:id/frame_like`、`frame_coin`、`frame_fav` 控件，只在三者都未选中时允许对点赞按钮定时按住一次，并拒绝单独点赞、投币或收藏。收到长按执行结果后会用掉这次机会；提交前因页面过期而丢弃的决策不计入。长按后最多观察四次，在观察之间等待，不再操作页面。控件缺失、已存在选中状态或布局不匹配时停止，不猜测替代目标。
 

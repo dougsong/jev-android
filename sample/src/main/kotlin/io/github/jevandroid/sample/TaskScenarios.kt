@@ -1,5 +1,7 @@
 package io.github.jevandroid.sample
 
+import io.github.jevandroid.core.Task
+
 internal enum class FixtureKind { NONE, SAVE_TEXT, LONG_PRESS }
 
 internal data class TaskScenario(
@@ -11,10 +13,22 @@ internal data class TaskScenario(
     val inputs: List<String>,
     val fixture: FixtureKind = FixtureKind.NONE,
     val timeoutMillis: Long = 120_000,
-)
+    val longPressDurationMillis: Long = 2_000,
+) {
+    fun createTask(
+        goal: String = this.goal,
+        allowedPackages: Set<String> = packages.toSet(),
+        textValues: Map<String, String> = inputs.mapIndexed { index, value -> "value_$index" to value }.toMap(),
+        longPressDurationMillis: Long = this.longPressDurationMillis,
+    ): Task = Task(goal, allowedPackages, textValues, timeoutMillis = timeoutMillis,
+        longPressDurationMillis = longPressDurationMillis)
+}
 
 /** Selecting a scenario only fills editable fields; it never starts a task. */
 internal object TaskScenarios {
+    fun parseHoldDurationMillis(value: String): Long? =
+        value.trim().toLongOrNull()?.takeIf { it in 500..5_000 }
+
     fun create(hostPackage: String): List<TaskScenario> = listOf(
         TaskScenario(
             id = "save_text",
@@ -28,8 +42,8 @@ internal object TaskScenarios {
         TaskScenario(
             id = "long_press",
             title = "Built-in: long press",
-            description = "Press and hold the local test button for 2 seconds, then release. The held touch is checked independently.",
-            goal = "On the test page, press and hold the Hold to confirm button for 2 seconds, then release. " +
+            description = "Press and hold the local test button (default: 2 seconds), then release. The held touch is checked independently.",
+            goal = "On the test page, press and hold the Hold to confirm button for the configured hold duration, then release. " +
                 "Keep the touch down for the full duration, then confirm that Long press confirmed is displayed.",
             packages = listOf(hostPackage),
             inputs = emptyList(),
@@ -49,11 +63,11 @@ internal object TaskScenarios {
         TaskScenario(
             id = "bilibili_triple",
             title = "Bilibili: search + triple action",
-            description = "Search testv, open the first ordinary video, then hold Like once for 2 seconds. " +
+            description = "Search testv, open the first ordinary video, then hold Like once (default: 4 seconds). " +
                 "This can like the video, spend account coins, and add it to favorites.",
             goal = "Open Bilibili, search for testv, and open the first ordinary video in the search results, " +
                 "skipping advertisements and live streams. On that video, press and hold the Like button once " +
-                "for 2 seconds to trigger the combined like, coin, and favorite action. " +
+                "for the configured hold duration to trigger the combined like, coin, and favorite action. " +
                 "Inspect the resulting interface. Report done only if all three outcomes are visibly confirmed. " +
                 "Never undo an existing like or favorite, and never repeat the hold or fall back to separate actions " +
                 "when the result is uncertain. Stop if the hold action is unavailable, any result cannot be confirmed, " +
@@ -61,6 +75,7 @@ internal object TaskScenarios {
             packages = listOf("tv.danmaku.bili"),
             inputs = listOf("testv"),
             timeoutMillis = 180_000,
+            longPressDurationMillis = 4_000,
         ),
         TaskScenario(
             id = "custom",
