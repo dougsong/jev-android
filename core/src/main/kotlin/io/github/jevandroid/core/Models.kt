@@ -9,6 +9,8 @@ data class Element(
     val value: String,
     val checked: Boolean?,
     val operations: Set<Operation>,
+    /** Optional Android view resource name, such as package:id/control; never a dispatch target. */
+    val resourceId: String? = null,
 )
 
 data class UiSnapshot(

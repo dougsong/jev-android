@@ -26,6 +26,19 @@ class DeepSeekChoicesTest {
     private fun alias(choices: DeepSeekChoices, operation: Operation, target: String? = null): String =
         choices.actions.entries.single { it.value == DeepSeekChoices.Action(operation, target) }.key
 
+    @Test fun resourceNamesAreContextAndChangeBindingsButNeverBecomeDispatchTargets() {
+        val like = node("0.1", "Like", operations = setOf(Operation.LONG_PRESS))
+            .copy(resourceId = "test.app:id/frame_like")
+        val original = DeepSeekChoices.create(task, snapshot(like))
+        val changed = DeepSeekChoices.create(task, snapshot(like.copy(resourceId = "test.app:id/frame_fav")))
+        assertEquals("test.app:id/frame_like", original.describe().getJSONArray("elements")
+            .getJSONObject(0).getString("resource_id"))
+        assertNotEquals(alias(original, Operation.LONG_PRESS, "0.1"), alias(changed, Operation.LONG_PRESS, "0.1"))
+        assertFalse(original.actions.values.any { it.target == like.resourceId })
+        assertTrue(DeepSeekChoices.create(task, snapshot(node("0.2"))).describe()
+            .getJSONArray("elements").getJSONObject(0).isNull("resource_id"))
+    }
+
     @Test fun blankClickableCardCarriesItsReadOnlyTitleWithoutMakingTheTitleClickable() {
         val observed = snapshot(
             node("0.1", operations = setOf(Operation.CLICK, Operation.LONG_PRESS)),

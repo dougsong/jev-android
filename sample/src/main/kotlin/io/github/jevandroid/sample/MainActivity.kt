@@ -32,7 +32,7 @@ class MainActivity : Activity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         val column = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(32, 32, 32, 32) }
         setContentView(ScrollView(this).apply { addView(column) })
-        column.addView(TextView(this).apply { text = "Jev Android SDK · 0.3.4"; textSize = 25f })
+        column.addView(TextView(this).apply { text = "Jev Android SDK · 0.3.5"; textSize = 25f })
         status = TextView(this).apply { text = "Ready"; textSize = 16f }
         column.addView(status)
         column.addView(TextView(this).apply { text = "Decision provider" })
@@ -128,10 +128,12 @@ class MainActivity : Activity() {
             val backend = selection.backend
             val apiKey = key.text.toString().trim()
             val modelName = model.text.toString().trim()
-            val provider = when (backend) {
+            val backendProvider = when (backend) {
                 ModelBackend.JEV -> JevProvider(apiKey, modelName)
                 ModelBackend.DEEPSEEK -> DeepSeekProvider(apiKey, modelName)
             }
+            val triplePolicy = if (scenario.id == "bilibili_triple") BilibiliTriplePolicy() else null
+            val provider = triplePolicy?.provider(backendProvider) ?: backendProvider
             val values = input.text.toString().lines().filter { it.isNotEmpty() }.mapIndexed { i, value -> "value_$i" to value }.toMap()
             val task = Task(goal.text.toString(), allowedPackages, values, timeoutMillis = scenario.timeoutMillis)
             val expected = values.values.firstOrNull().orEmpty()
@@ -140,10 +142,10 @@ class MainActivity : Activity() {
                 FixtureKind.LONG_PRESS -> "Long press confirmed"
                 FixtureKind.NONE -> null
             }
-            val verifier = expectedResult?.let { result -> OutcomeVerifier { _, snapshot ->
+            val verifier: OutcomeVerifier? = triplePolicy ?: expectedResult?.let { result -> OutcomeVerifier { _, snapshot ->
                 snapshot.packageName == packageName && snapshot.elements.any { it.value == result }
             } }
-            append("Starting task with ${backend.label}. Use the Stop Jev button at the top right to cancel.")
+            append("Starting ${scenario.title} with ${backend.label}. Use the Stop Jev button at the top right to cancel.")
             if (scenario.fixture != FixtureKind.NONE) {
                 startActivity(Intent(this, FixtureActivity::class.java).putExtra(FixtureActivity.EXTRA_KIND, scenario.fixture.name))
             } else moveTaskToBack(true)
@@ -151,17 +153,20 @@ class MainActivity : Activity() {
                 delay(800)
                 try {
                     val run = service.start(task, provider, verifier,
-                        onEvent = { event -> append(when (event) {
+                        gate = triplePolicy ?: ActionGate { _, _, _ -> true },
+                        onEvent = { event ->
+                            triplePolicy?.onEvent(event)?.let(::append)
+                            append(when (event) {
                             is AgentEvent.Observed -> "Observed ${event.packageName}: ${event.elementCount} elements"
                             is AgentEvent.Chosen -> "Selected ${event.decision.operation}, confidence=${event.decision.confidence}"
                             is AgentEvent.Refreshing -> "UI changed before ${event.operation}; no action sent. Observing again (${event.attempt}/3)."
                             is AgentEvent.Executed -> "Step ${event.record.step}: accepted=${event.record.accepted}"
-                            is AgentEvent.Finished -> "${event.result.status}: ${event.result.message}"
+                            is AgentEvent.Finished -> "${event.result.status}: ${triplePolicy?.messageFor(event.result) ?: event.result.message}"
                         }) },
                         onError = { error -> append(if (error is DeepSeekResponseException) requireNotNull(error.message)
                             else "Failed: ${error.javaClass.simpleName} ${error.message}") })
                     run.join()
-                    if (run.isCancelled) append("Task stopped")
+                    if (run.isCancelled) append("Task stopped: ${service.lastStopReason ?: "Task cancelled"}; an in-flight gesture may still finish. Inspect before restarting.")
                 } catch (e: Exception) {
                     if (e is CancellationException) throw e
                     append("Could not start: ${e.message}")

@@ -4,12 +4,13 @@
 
 可接入 Android 项目的 Kotlin UI Agent SDK。**TypeSafe Jev 或 DeepSeek** 从当前屏幕的真实控件中选择操作，再由 Android 无障碍服务执行。两个后端都能独立完成任务：使用 DeepSeek API Key 无需 Jev 账号，使用 Jev 则填写 TypeSafe Key。项目包含示例 App 和无需目标应用账号的本地测试页面。
 
-API 尚未稳定。项目未发布到 Maven Central；下文的依赖坐标仅适用于本项目生成的本地 Maven 仓库。示例 App 界面和代码保持英文。
+API 尚未稳定。项目未发布到 Maven Central；下文的依赖坐标仅适用于本项目生成的本地 Maven 仓库。示例 App 界面和代码保持英文。0.3.5 为 `Element` 构造函数新增可选的 `resourceId` 参数；Kotlin 源码重新编译时可省略，但其二进制签名已变化，请一同重新构建 core、SDK 和宿主，不要仅替换已有二进制集成中的单个产物。
 
 ## 功能与限制
 
 - 根据可读取的控件动态构建动作表。Jev 通过一次请求中的多个问题选择操作与目标；DeepSeek 通过严格的 `select_action` 函数结构，从枚举动作中选择。两者共用执行循环和检查机制。
 - 为 DeepSeek 的可操作容器描述补充有数量和长度限制的子节点文字，让可点击卡片包含可见标题，同时不会把不可操作的文字子节点变成点击目标。
+- 在两个后端的元素描述中提供可选的 Android 视图资源 ID，辅助识别控件。操作仍指向当前观察到的元素 ID；资源 ID 不会增加控件的操作能力，也不会跳过页面检查。
 - 支持点击、长按可访问控件、替换输入框内容、前后滚动、返回、打开允许的应用、等待，以及报告完成或受阻。
 - `Operation.LONG_CLICK` 调用控件声明支持的 Android `ACTION_LONG_CLICK` 动作；`Operation.LONG_PRESS` 在当前读取到的可见、可操作控件中心按住触屏。按住时长由宿主通过 `Task.longPressDurationMillis` 指定（默认 2,000 毫秒，允许范围为 500–5,000 毫秒），模型不能提供坐标或时长。
 - 本 SDK 的两个后端均不生成任意输入文字。调用方通过 `Task.textValues` 提供命名的准确候选值，由选中的模型选择；只需要当前后端的 API Key。
@@ -19,6 +20,7 @@ API 尚未稳定。项目未发布到 Maven Central；下文的依赖坐标仅�
 - 输入后读取控件并验证完整值。操作被拒绝或结果不确定时停止，不自动重复执行；只有明确在提交前因页面过期而被拒绝的动作才会触发重新观察。
 - 提供包名白名单、步骤和时间限制、最低置信度、无进展检测及宿主自定义操作策略。
 - 取消协程会取消正在进行的 HTTP 请求；无障碍悬浮按钮可停止后续操作。已经提交给 Android 的操作无法撤销；已经提交的按住手势可能持续到设定时长结束后才释放触屏。
+- 区分主动 Stop、Android 中断无障碍服务、服务断开导致的取消。任务被取消不能证明正在进行的手势是否已到达目标应用。
 - `DONE` 仅表示模型声称完成。只有提供 `OutcomeVerifier` 且验证通过，任务才返回 `VERIFIED`，否则返回 `UNVERIFIED`。
 
 当前不支持截图视觉、猜测坐标、除上述限时按住操作以外的任意手势、通用 WebView 或 Canvas 识别、密码输入、文本生成、锁屏操作及长期后台无人值守。尚未在小米真机上验证 HyperOS 兼容性。宿主应用负责决定允许哪些设置变更、付款、消息发送等操作。默认 gate 放行白名单应用内的有效动作，不会自动识别所有敏感控件。
@@ -144,7 +146,7 @@ Linux 使用 `./gradlew`。项目设置了 `android.overridePathCheck=true`，�
 
 - `sample/build/outputs/apk/debug/sample-debug.apk`
 - `sdk/build/outputs/aar/sdk-release.aar`
-- `core/build/libs/core-0.3.4.jar`
+- `core/build/libs/core-0.3.5.jar`
 
 **AAR 不包含全部依赖。** SDK 还依赖 core 模块、协程、OkHttp 和 Gson，建议按下面的源码模块或 Maven 方式接入。
 
@@ -176,7 +178,7 @@ maven { url = uri("vendor/jev-maven") }
 宿主 app 添加依赖：
 
 ```kotlin
-implementation("io.github.jevandroid:jev-android:0.3.4")
+implementation("io.github.jevandroid:jev-android:0.3.5")
 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 ```
 
@@ -261,7 +263,7 @@ val job = service.start(
 
 两个后端的主线程调用、取消和结果验证要求相同。此代码演示 API 用法。2026-09-21 使用真实 DeepSeek 运行 **Built-in: save text**，返回 `VERIFIED`，页面显示 `Saved: Hello Jev`。另一次测试运行了 B 站 `testv` 搜索预设，进入了 TESTV 视频详情页；由于预设没有独立结果验证器，完成状态为 `UNVERIFIED`。详见[验证记录](VALIDATION.md)。
 
-`OutcomeVerifier` 接收新读取的 `UiSnapshot`，用于检查具体业务结果。示例会核对测试页面显示的保存值或长按结果；验证器返回 false 时，结果为 `UNVERIFIED`。
+`OutcomeVerifier` 接收新读取的 `UiSnapshot`，用于检查具体业务结果。示例会核对测试页面显示的保存值或长按结果；B 站三连预设还会核对同一已观察视频详情页的三个控件是否全部选中。验证器返回 false 时，结果为 `UNVERIFIED`。
 
 `ActionGate` 可以接入宿主确认界面或业务规则，返回 false 会停止任务。如果等待确认时页面发生变化，运行时会在提交前拒绝旧决策；允许刷新时会获取新决策，并再次经过 gate 检查。不要仅凭后端返回的置信度授权敏感操作。
 
@@ -291,16 +293,20 @@ val job = service.start(
 | **Bilibili: search + triple action** | `tv.danmaku.bili` | 搜索 `testv`，打开第一个普通视频，再按住点赞按钮两秒一次，尝试完成一键三连。 |
 | **Custom task** | 用户配置 | 从空白字段开始，填写任务、允许的包名和准确的输入候选。 |
 
-B 站预设面向国内版 Android App，是任务说明示例，尚未验证为可稳定完成的应用集成。三连预设会影响当前登录账号，并可能消耗 B 站硬币。其说明要求执行一次 `LONG_PRESS`，并在需要登录、出现验证码、硬币不足、没有可用目标或没有可见成功结果时停止，不要求重复按住，也不退回到分别点赞、投币和收藏。定时按住使用读取到的控件中心，因此目标必须可读取且识别正确，SDK 不能保证完成 B 站三连。外部应用预设没有内置结果验证器，模型声称完成时返回 `UNVERIFIED`。
+B 站预设面向国内版 Android App。搜索预设没有独立结果验证器，模型声称完成时返回 `UNVERIFIED`。三连预设会影响当前登录账号，并可能消耗 B 站硬币；尚未验证其在真实账号上成功完成三连。
+
+三连预设在模型指令之外加入了本地操作策略。它识别视频详情页上准确的 `tv.danmaku.bili:id/frame_like`、`frame_coin`、`frame_fav` 控件，只在三者都未选中时允许对点赞按钮定时按住一次，并拒绝单独点赞、投币或收藏。收到长按执行结果后会用掉这次机会；提交前因页面过期而丢弃的决策不计入。长按后最多观察四次，在观察之间等待，不再操作页面。控件缺失、已存在选中状态或布局不匹配时停止，不猜测替代目标。
+
+结果验证器要求三个控件均为 `checked=true`，并且视频标题与长按前观察到的标题完全一致。这只能验证可见最终状态，不能证明打开的是首条搜索结果、发生了新的投币交易或后端账号记录已经更新。定时按住使用读取到的控件中心，Android 接受手势不代表 B 站完成了一键三连。如果控件仍未选中，预设不能返回 `VERIFIED`。
 
 ## 数据处理与错误行为
 
 - 只读取白名单应用的可见控件。其他页面的快照仅包含前台包名和任务允许打开的应用列表。
-- 跳过密码节点及其子树。这不是完整的个人信息脱敏机制：允许应用内的其他可见文字可能含私人信息。页面信息、任务目标、输入候选和任务历史会发送到选中的后端。
+- 跳过密码节点及其子树。这不是完整的个人信息脱敏机制：允许应用内的其他可见文字可能含私人信息。页面信息（包括读取到的视图资源 ID）、任务目标、输入候选和任务历史会发送到选中的后端。
 - 不上传截图。各后端只将自己的 API Key 发送到对应的固定地址：Jev 使用 `https://api.typesafe.ai/v1/systemone`，DeepSeek 使用 `https://api.deepseek.com/beta/chat/completions`。禁用重定向和自动连接重试；选择一个后端不会调用另一个后端。
 - 单个快照最多包含 220 个元素，节点遍历也有上限。较长页面需要滚动；截断后未包含的控件不会提供给任何模型。
 - 示例分别在内存中保存 Jev 与 DeepSeek 的 Key，切换后端不会复用另一个后端的密钥。密钥不持久化或备份；配置页面禁止截图。SDK 不替宿主管理凭据。向其他用户分发时，建议使用用户自备 Key 或受控后端。
-- HTTP、协议和运行时异常交给 `onError`。DeepSeek 响应被拒绝时，提供脱敏的原因代码（如 `EMPTY_CONTENT`、`TRUNCATED` 或 `INVALID_TARGET`）及尝试次数，不包含原始响应内容或嵌套解析错误。允许的一次决策纠正不同于 HTTP 重试，也不会重复执行 UI 操作。取消遵循协程取消语义，不作为成功返回。
+- HTTP、协议和运行时异常交给 `onError`。DeepSeek 响应被拒绝时，提供脱敏的原因代码（如 `EMPTY_CONTENT`、`TRUNCATED` 或 `INVALID_TARGET`）及尝试次数，不包含原始响应内容或嵌套解析错误。允许的一次决策纠正不同于 HTTP 重试，也不会重复执行 UI 操作。取消遵循协程取消语义，不作为成功返回。服务的 `lastStopReason` 提供主动 Stop、Android 中断及服务断开的固定诊断说明，不包含任务或页面内容。
 - 操作失败、低置信度、gate 拒绝、无进展或用尽连续三次页面刷新机会时返回 `BLOCKED`。刷新要求确认动作尚未提交，重新读取当前页面，并让后端做出新决策。成功执行动作后会重置连续刷新计数。已提交或结果不确定的操作不会自动重复提交。
 - 模型声称完成，以及 Android 返回 `performAction=true`，都不是业务结果成功的证据。
 

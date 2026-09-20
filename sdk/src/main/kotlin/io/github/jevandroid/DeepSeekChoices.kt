@@ -30,6 +30,7 @@ internal class DeepSeekChoices private constructor(
         .put("elements", JSONArray(elements.map { node ->
             JSONObject().put("label", node.element.label).put("role", node.element.role)
                 .put("value", node.element.value).put("checked", node.element.checked ?: JSONObject.NULL)
+                .put("resource_id", node.element.resourceId ?: JSONObject.NULL)
                 .put("context", JSONArray(node.context)).put("actions", operationAliases(node.actions))
         }))
         .put("apps", JSONArray(apps.map { app ->
@@ -154,6 +155,7 @@ internal class DeepSeekChoices private constructor(
                 add(element.role)
                 add(element.value)
                 add(element.checked?.toString())
+                add(element.resourceId)
                 val operations = targeted.filter { it in element.operations }
                 add(operations.size.toString())
                 operations.forEach { add(it.name) }

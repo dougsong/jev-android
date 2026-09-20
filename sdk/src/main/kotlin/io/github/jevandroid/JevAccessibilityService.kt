@@ -20,9 +20,12 @@ open class JevAccessibilityService : AccessibilityService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var active: Job? = null
     private var stopButton: Button? = null
+    /** Fixed diagnostic for the most recent cancellation; contains no task or screen data. */
+    var lastStopReason: String? = null
+        private set
     override fun onServiceConnected() { connection.value = this }
     override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
-    override fun onInterrupt() { stop() }
+    override fun onInterrupt() { cancelActive("Android interrupted the accessibility service") }
 
     /** Call on the main thread. One run per service; Job cancellation stops network requests and future actions. */
     fun start(
@@ -35,6 +38,7 @@ open class JevAccessibilityService : AccessibilityService() {
     ): Job {
         check(android.os.Looper.myLooper() == mainLooper) { "Call start on main thread" }
         check(active?.isActive != true) { "A task is already running" }
+        lastStopReason = null
         return scope.launch(start = CoroutineStart.LAZY) {
             try {
                 showStopButton()
@@ -46,7 +50,11 @@ open class JevAccessibilityService : AccessibilityService() {
         }.also { active = it; it.start() }
     }
 
-    fun stop() { active?.cancel() }
+    fun stop() { cancelActive("Stop requested") }
+    private fun cancelActive(reason: String) {
+        if (active?.isActive == true) lastStopReason = reason
+        active?.cancel()
+    }
     internal fun stopButtonBounds(): ScreenBounds? {
         val button = stopButton?.takeIf { it.isShown && it.width > 0 && it.height > 0 } ?: return null
         val location = IntArray(2).also(button::getLocationOnScreen)
@@ -77,7 +85,7 @@ open class JevAccessibilityService : AccessibilityService() {
         stopButton = null
     }
     override fun onDestroy() {
-        stop(); scope.cancel(); removeStopButton()
+        cancelActive("Accessibility service disconnected"); scope.cancel(); removeStopButton()
         if (connection.value === this) connection.value = null
         super.onDestroy()
     }

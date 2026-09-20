@@ -14,6 +14,17 @@ class JevProtocolTest {
         Element("10", "Sustained hold", "Button", "", null, setOf(Operation.LONG_PRESS)),
     ))
     private fun request() = JevProtocol.request(task, snapshot, emptyList(), "jev-latest")
+    @Test fun resourceNamesAreOptionalContextNotActionTargets() {
+        val resourceName = "test.app:id/save"
+        val request = JevProtocol.request(task, snapshot.copy(elements = listOf(
+            snapshot.elements[0], snapshot.elements[1].copy(resourceId = resourceName))), emptyList(), "jev-latest")
+        val elements = request.getJSONObject("state").getJSONArray("elements")
+        assertTrue(elements.getJSONObject(0).isNull("resource_id"))
+        assertEquals(resourceName, elements.getJSONObject(1).getString("resource_id"))
+        val targets = request.getJSONObject("questions").getJSONObject("click_target").getJSONObject("criteria")
+        assertEquals(setOf("8"), targets.keys().asSequence().toSet())
+        assertFalse(targets.has(resourceName))
+    }
     private fun response(request: JSONObject, op: String): JSONObject {
         val questions = request.getJSONObject("questions")
         val answers = JSONObject()

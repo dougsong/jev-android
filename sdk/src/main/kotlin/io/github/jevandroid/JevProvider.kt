@@ -46,6 +46,7 @@ internal object JevProtocol {
                 JSONObject().put("id", element.id).put("label", element.label)
                     .put("role", element.role).put("value", element.value)
                     .put("checked", element.checked ?: JSONObject.NULL)
+                    .put("resource_id", element.resourceId ?: JSONObject.NULL)
                     .put("operations", JSONArray(element.operations.map { it.name }))
             }))
             .put("recent_actions", JSONArray(history.takeLast(10).map {

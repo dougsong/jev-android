@@ -217,7 +217,8 @@ class AccessibilityRuntime(private val service: AccessibilityService) : Detailed
                 }
                 if (text.isNotBlank() || label.isNotBlank() || operations.isNotEmpty()) {
                     val element = Element(path, label, node.className?.toString().orEmpty(), text,
-                        if (node.isCheckable) node.isChecked else null, operations)
+                        if (node.isCheckable) node.isChecked else null, operations,
+                        node.viewIdResourceName?.take(300))
                     elements += element
                     nodes[path] = AccessibilityNodeInfo.obtain(node)
                     if (holdTarget != null) longPressTargets[path] = holdTarget

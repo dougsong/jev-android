@@ -117,6 +117,37 @@ class RuntimeInstrumentedTest {
         }
     }
 
+    @Test(timeout = 30_000) fun capturesResourceIdsAndReportsServiceInterruption() = withService { service ->
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        ActivityScenario.launch(FixtureActivity::class.java).useWithExplicitFinish { scenario ->
+            scenario.onActivity { activity ->
+                views(activity.window.decorView).filterIsInstance<android.widget.Button>()
+                    .single { it.text.toString().equals("Save", ignoreCase = true) }.id = android.R.id.button1
+            }
+            val task = Task("Wait for interruption", setOf("io.github.jevandroid.sample"))
+            val snapshot = runBlocking { awaitFixture(AccessibilityRuntime(service), task, "Save") }
+            assertEquals("android:id/button1", snapshot.elements.single {
+                it.value.equals("Save", ignoreCase = true) && Operation.CLICK in it.operations
+            }.resourceId)
+            val entered = CompletableDeferred<Unit>()
+            val provider = object : DecisionProvider {
+                override suspend fun decide(task: Task, snapshot: UiSnapshot, history: List<StepRecord>): Decision {
+                    entered.complete(Unit)
+                    awaitCancellation()
+                }
+            }
+            lateinit var run: Job
+            val events = mutableListOf<AgentEvent>()
+            instrumentation.runOnMainSync { run = service.start(task, provider, onEvent = { events += it }) }
+            runBlocking { withTimeout(5_000) { entered.await() } }
+            instrumentation.runOnMainSync { service.onInterrupt() }
+            runBlocking { withTimeout(5_000) { run.join() } }
+            assertTrue(run.isCancelled)
+            assertEquals("Android interrupted the accessibility service", service.lastStopReason)
+            assertTrue(events.none { it is AgentEvent.Executed })
+        }
+    }
+
     @Test fun observesInputsClicksAndVerifiesRealFixture() = withService { service ->
         ActivityScenario.launch(FixtureActivity::class.java).useWithExplicitFinish {
             runBlocking { awaitFixture(AccessibilityRuntime(service), Task("Wait for fixture", setOf("io.github.jevandroid.sample")), "Save") }

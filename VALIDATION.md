@@ -1,6 +1,30 @@
 # Validation record
 
-Date: 2026-09-21. This record covers version 0.3.4, with earlier device and regression results retained under their version labels.
+Date: 2026-09-21. This record covers version 0.3.5, with earlier device and regression results retained under their version labels.
+
+## Version 0.3.5 Bilibili triple-action policy and cancellation diagnostics
+
+After the successful version 0.3.4 search and Save-text checks below, the user reported that the triple action had not succeeded. A subsequent version 0.3.4 trace recorded one `LONG_PRESS` with `accepted=true`, another `LONG_PRESS` decision, and then a generic task-stopped message. The user confirmed that they had not pressed Stop. UI inspection after the run showed Like, Coin, and Favorite all reporting `checked=false`; successful triple action was not established. A chosen decision is not an execution result, and cancellation without a second result does not prove that a second gesture was never submitted.
+
+The diagnostic procedure included `uiautomator dump` while the accessibility task could still be active. Android documents that [UiAutomation suppresses accessibility services by default](https://developer.android.com/reference/android/app/UiAutomation#FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES). The debug inspection may therefore have interrupted this run; its exact cancellation source was not retained. The earlier Samsung interception finding from the local hold fixture remains relevant, but it does not establish the cause of this Bilibili failure. The Samsung long-press setting remained `1` during this investigation. Further live validation must avoid a default UI-automation connection while the task is active.
+
+Version 0.3.5 adds optional Android view resource IDs to observed `Element` descriptions in both providers. Resource IDs identify controls but are never dispatch targets: operations still resolve through the current snapshot's element ID and pass the existing host gate and fresh-screen checks. Adding the optional constructor parameter is source-compatible for Kotlin calls that omit it when rebuilt, but changes the binary constructor signature; core, SDK, and host must be rebuilt together.
+
+The sample's Bilibili triple-action preset now enforces a local policy using the exact Like, Coin, and Favorite resource IDs on a video detail page. It permits one timed hold on Like only when all three controls are unchecked, and rejects individual like/coin/favorite interactions. The hold allowance is consumed by an execution result, so a provably unsubmitted stale decision may be observed and selected again. After the hold, the local provider checks up to four observations, with waits between them; it cannot request another interaction. Its verifier requires all three controls to report `checked=true` on the same observed video title. This check does not establish first-result ordering, a newly spent coin, or backend account state. Missing, ambiguous, or unsupported controls cannot produce verified success.
+
+The service also records a fixed cancellation diagnostic for a Stop request, Android accessibility interruption, or service disconnection. These messages include no task or screen content. They make future cancellations distinguishable; they cannot retrospectively identify the version 0.3.4 cancellation or undo a submitted gesture.
+
+### Version 0.3.5 verification status
+
+All **146 offline tests passed**: 29 core, 94 SDK, and 23 sample tests, with no failures, errors, or skips. The release AAR, demo APK, instrumented test APK, and both local Maven publications built successfully at version 0.3.5. The full build completed in 18 seconds. Lint reported 0 errors with 6 SDK warnings and 34 sample warnings; the build is not warning-free.
+
+The installed 0.3.5 demo passed **3 Samsung device smoke tests, 0 failures**, in 8.914 seconds: saving text through the accessibility fixture, refreshing a stale UI before exactly one Save click, and capturing a resource ID while distinguishing a service interruption. The new test observed `android:id/button1` through the runtime, invoked the service's `onInterrupt()` callback, and confirmed that the waiting deterministic provider was cancelled with the fixed interruption reason before any UI action. This checks callback handling, not the cause of the earlier live cancellation.
+
+The test APK was removed afterward, and installed versionCode 8 / versionName 0.3.5 was verified. Instrumentation initially left the Jev accessibility binding unavailable; opening the demo and rebinding only its service restored the binding. The exact original accessibility-service list including Bixby was preserved, and the Samsung long-press setting remained `1`.
+
+The version 0.3.5 source, local Maven, and APK packages passed configuration/cache exclusion, expected artifact and source content, executable wrapper permission, SHA-256, and built-versus-packaged APK checks. A credential-pattern scan found no matching secrets in tracked or publishable source files.
+
+Version 0.3.5 live API validation is pending a user-entered key. A successful real-account Bilibili triple action has not been verified. The four post-hold observations currently span roughly two seconds; slower UI updates can conservatively stop the task without another interaction. Inspect the final app state before starting a new run. The version 0.3.4 live search and Save-text results below remain evidence for those flows only.
 
 ## Version 0.3.4 bounded DeepSeek action selection
 
