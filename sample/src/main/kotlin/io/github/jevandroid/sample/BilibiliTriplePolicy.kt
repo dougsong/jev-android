@@ -26,9 +26,11 @@ internal class BilibiliTriplePolicy(
     private var verified = false
 
     /** After the hold, observe locally; the model cannot request another interaction. */
-    fun provider(delegate: DecisionProvider): DecisionProvider = object : DecisionProvider {
-        override suspend fun decide(task: Task, snapshot: UiSnapshot, history: List<StepRecord>): Decision {
-            val sent = attempt ?: return delegate.decide(task, snapshot, history)
+    fun provider(delegate: DecisionProvider): DecisionProvider = object : ContextualDecisionProvider {
+        override suspend fun decide(
+            task: Task, snapshot: UiSnapshot, history: List<StepRecord>, context: DecisionContext,
+        ): Decision {
+            val sent = attempt ?: return delegate.decideWithContext(task, snapshot, history, context)
             if (!sent.accepted || sent.context == null) {
                 explanation = "The hold was rejected or its target could not be confirmed; no further interaction was sent. Inspect before restarting."
                 return Decision(Operation.BLOCKED)

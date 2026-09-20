@@ -122,13 +122,17 @@ class RuntimeInstrumentedTest {
         ActivityScenario.launch(FixtureActivity::class.java).useWithExplicitFinish { scenario ->
             scenario.onActivity { activity ->
                 views(activity.window.decorView).filterIsInstance<android.widget.Button>()
-                    .single { it.text.toString().equals("Save", ignoreCase = true) }.id = android.R.id.button1
+                    .single { it.text.toString().equals("Save", ignoreCase = true) }.apply {
+                        id = android.R.id.button1
+                        isSelected = true
+                    }
             }
             val task = Task("Wait for interruption", setOf("io.github.jevandroid.sample"))
             val snapshot = runBlocking { awaitFixture(AccessibilityRuntime(service), task, "Save") }
             assertEquals("android:id/button1", snapshot.elements.single {
                 it.value.equals("Save", ignoreCase = true) && Operation.CLICK in it.operations
             }.resourceId)
+            assertEquals(true, snapshot.elements.single { it.resourceId == "android:id/button1" }.selected)
             val entered = CompletableDeferred<Unit>()
             val provider = object : DecisionProvider {
                 override suspend fun decide(task: Task, snapshot: UiSnapshot, history: List<StepRecord>): Decision {
@@ -175,6 +179,74 @@ class RuntimeInstrumentedTest {
         }
     }
 
+    @Test(timeout = 45_000) fun unchangedAcceptedClickReplansFromThePageAndSavesWithAnotherTarget() = withService { service ->
+        ActivityScenario.launch(FixtureActivity::class.java).useWithExplicitFinish { scenario ->
+            val task = Task("Save Hello Jev", setOf("io.github.jevandroid.sample"),
+                mapOf("message" to "Hello Jev"), maxSteps = 8, timeoutMillis = 25_000)
+            var ineffectiveClicks = 0
+            var receivedNoChangeFeedback = false
+            scenario.onActivity { activity ->
+                val field = views(activity.findViewById(android.R.id.content)).filterIsInstance<EditText>().single()
+                field.setText("Hello Jev")
+                field.clearFocus()
+                // This is a real clickable accessibility candidate whose listener has no UI effect.
+                // It exists only in this test and does not change the production fixture.
+                (field.parent as android.widget.LinearLayout).addView(android.widget.Button(activity).apply {
+                    text = "Unavailable save"
+                    setOnClickListener { ineffectiveClicks++ }
+                })
+            }
+            runBlocking { awaitFixture(AccessibilityRuntime(service), task, "Unavailable save") }
+            val result = CompletableDeferred<RunResult>()
+            val executed = mutableListOf<StepRecord>()
+            var ineffectiveTarget: String? = null
+            val provider = object : ContextualDecisionProvider {
+                override suspend fun decide(
+                    task: Task, snapshot: UiSnapshot, history: List<StepRecord>, context: DecisionContext,
+                ): Decision {
+                    if (snapshot.elements.any { it.value == "Saved: Hello Jev" }) return Decision(Operation.DONE)
+                    val previous = context.lastAction
+                    if (previous == null) {
+                        val target = snapshot.elements.single {
+                            it.value.equals("Unavailable save", ignoreCase = true) && Operation.CLICK in it.operations
+                        }
+                        ineffectiveTarget = target.id
+                        return Decision(Operation.CLICK, target.id, summary = "Try the visible save candidate.",
+                            expectedChange = "Saved text appears.")
+                    }
+                    assertEquals(Operation.CLICK, previous.decision.operation)
+                    assertEquals(ineffectiveTarget, previous.decision.target)
+                    assertEquals(ObservationOutcome.NO_VISIBLE_CHANGE, previous.outcome)
+                    assertTrue(context.excludedActions.any { it.matches(previous.decision) })
+                    receivedNoChangeFeedback = true
+                    val target = snapshot.elements.single {
+                        it.value.equals("Save", ignoreCase = true) && Operation.CLICK in it.operations
+                    }
+                    return Decision(Operation.CLICK, target.id,
+                        summary = "The prior candidate had no visible effect. The page still offers Save.",
+                        expectedChange = "Saved: Hello Jev appears.")
+                }
+            }
+            InstrumentationRegistry.getInstrumentation().runOnMainSync {
+                service.start(task, provider,
+                    verifier = OutcomeVerifier { _, snapshot -> snapshot.elements.any { it.value == "Saved: Hello Jev" } },
+                    onEvent = { event ->
+                        if (event is AgentEvent.Executed) executed += event.record
+                        if (event is AgentEvent.Finished) result.complete(event.result)
+                    }, onError = { result.completeExceptionally(it) })
+            }
+            val completed = runBlocking { withTimeout(30_000) { result.await() } }
+            assertEquals(completed.message, Status.VERIFIED, completed.status)
+            assertTrue("The next decision must receive observed no-change feedback", receivedNoChangeFeedback)
+            assertEquals("The ineffective listener must run only once", 1, ineffectiveClicks)
+            assertEquals(1, executed.count { it.target == ineffectiveTarget })
+            assertEquals(2, executed.size)
+            assertTrue(executed.all { it.accepted && it.operation == Operation.CLICK })
+            assertNotEquals(executed[0].target, executed[1].target)
+            assertEquals(2, completed.steps)
+        }
+    }
+
     @Test fun changedUiIsRejectedAndOutsidePackageIsNotRead() = withService { service ->
         ActivityScenario.launch(FixtureActivity::class.java).useWithExplicitFinish { scenario ->
             runBlocking {
@@ -192,6 +264,8 @@ class RuntimeInstrumentedTest {
                 assertEquals(ActionResult.StaleBeforeDispatch,
                     runtime.executeWithResult(task, snapshot, Decision(Operation.CLICK, save.id)))
                 assertFalse(runtime.execute(task, snapshot, Decision(Operation.CLICK, save.id)))
+                assertEquals("Waiting is valid even while the page changes", ActionResult.Accepted,
+                    runtime.executeWithResult(task, snapshot, Decision(Operation.WAIT)))
                 val outside = runtime.observe(Task("Other", setOf("not.allowed")))
                 assertTrue(outside.elements.isEmpty())
             }

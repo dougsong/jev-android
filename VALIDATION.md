@@ -1,6 +1,44 @@
 # Validation record
 
-Date: 2026-09-21. This record covers version 0.3.6, with earlier device and regression results retained under their version labels.
+Date: 2026-09-21. This record covers version 0.3.7, with earlier device and regression results retained under their version labels.
+
+## Version 0.3.7 decisions based on observed effects
+
+The latest version 0.3.6 failure trace repeatedly observed the same page with 117 elements. Steps 7 through 11 each logged `CLICK` with `accepted=true`, but the page did not visibly progress, and the previous five-cycle unchanged-page rule stopped the run. The exact target was not logged, so the trace cannot identify which control was clicked or prove that all five clicks addressed the same target. An accepted Android dispatch was insufficient evidence that the task had advanced.
+
+Version 0.3.7 observes after each accepted action before requesting the next decision. `Task.settleTimeoutMillis` defaults to 1,500 ms and allows 0–10,000 ms; zero still requests an immediate observation. `WAIT` uses a separate 600 ms observation window. These budgets measure accumulated settling delays, not the duration of runtime observation calls. Progress compares the observed package, elements, and available apps, excluding geometry fingerprints. `Element.selected` is recorded separately from `checked`, so a selected-state change in a non-checkable tab or row also counts as semantic page change. The emitted `UI_CHANGED` and `NO_VISIBLE_CHANGE` outcomes describe observed effects, not business success or failure.
+
+An accepted non-`WAIT` action with no visible change excludes its exact operation/target/text-key combination while the page remains unchanged. Both Jev and DeepSeek receive the current page, up to ten recent observed effects, exclusions, and any replan reason. Page changes clear the exclusions, and a delayed visible result can update the previous outcome. DeepSeek also returns a brief summary and expected visible change; those fields remain untrusted context and do not control execution or establish success.
+
+The generic loop no longer stops solely because the page is unchanged for five cycles. `WAIT` is not counted as a failure; the deadline and decision budget still bound the run. A duplicate or low-confidence proposal is discarded before dispatch and allows at most two consecutive page-based replans. There is no scripted fallback or automatic retry after a rejected or uncertain mutation. Host policy, strict target checks, and pre-dispatch freshness checks remain in force. The sample's optional Bilibili one-hold policy and independent visible-state verifier remain separate constraints.
+
+Custom providers may implement the optional `ContextualDecisionProvider` extension to receive `DecisionContext`. Existing providers can continue using the original `DecisionProvider` method with the same local guards, but without the additional context. Added data fields and sealed `AgentEvent.Evaluated` / `AgentEvent.Replanning` variants require rebuilding core, SDK, sample, and host together and updating exhaustive event handlers.
+
+### Version 0.3.7 verification status
+
+All **184 offline tests passed**: 46 core, 105 SDK, and 33 sample tests, with no failures, errors, or skips. The release AAR, demo APK, instrumented test APK, and both local Maven publications built successfully at version 0.3.7. The full build completed in 16 seconds. Lint reported 0 errors with 6 SDK warnings and 37 sample warnings; the build is not warning-free. The instrumented test APK was rebuilt in 4 seconds after adding selected-state and stale-UI/WAIT checks.
+
+The installed 0.3.7 demo passed **5 Samsung device tests, 0 failures**, in 14.919 seconds, using deterministic providers or direct runtime calls:
+
+1. A click with no visible effect was dispatched exactly once. The next decision received `NO_VISIBLE_CHANGE` and the excluded action combination, selected an alternative Save action, and finished `VERIFIED`.
+2. The real accessibility fixture accepted text input and Save, and verified the saved value.
+3. A changed target caused one stale-screen refresh before exactly one Save click.
+4. Selected-state metadata was observed, and a service-interruption callback cancelled the waiting provider.
+5. A changed UI made an old click decision stale, while `WAIT` remained accepted without targeting a control.
+
+The test APK was removed afterward, and installed versionCode 10 / versionName 0.3.7 was verified. The exact original enabled-accessibility-service list and accessibility-enabled value were restored and read back, with the Jev service bound. The Samsung long-press setting stayed at its original value of `1` throughout these tests and was not changed.
+
+The source, local Maven, and APK packages passed local-configuration/cache exclusion, executable wrapper permission, current source content, version 0.3.7 Maven AAR/JAR, built-versus-packaged APK equality, and SHA-256 checks. A credential-pattern scan of 56 source files found no matching secrets. The offline and instrumented tests above did not call a real model API; the separate live checks are recorded below. The latest version 0.3.6 failure's exact click target remains unknown.
+
+### Version 0.3.7 live DeepSeek checks
+
+The user entered their key directly in the updated phone app. It remained in app memory and was not extracted or persisted for validation. In **Built-in: save text**, the contextual DeepSeek provider chose `SET_TEXT`, `CLICK`, and `DONE`. Both execution steps were accepted, and each reported `UI_CHANGED` after 250 ms of settling delays. Brief summaries and expected changes were parsed and displayed. The independent outcome verifier returned `VERIFIED`, and a separate UI observation confirmed the exact text `Saved: Hello Jev`.
+
+The **Bilibili: search testv** run started from the launcher, opened Bilibili's profile page, and chose Home followed by Search. Two decisions were discarded as stale before dispatch, including a click proposed on a transient three-element page. On the refreshed search page, the model entered `testv` and submitted Search. It chose `WAIT` while the page reported that results were loading, then opened a video and chose `WAIT` again while the detail page exposed only a sparse set of tabs. The final decision was `DONE`. The run recorded **8 accepted execution steps, including 2 `WAIT` actions**, and **2 stale decisions discarded before dispatch**.
+
+The search preset returned `UNVERIFIED` because it has no independent outcome verifier. Separate inspection of the public video UI confirmed `TESTV官方频道` and the title `购买iPhone18 Pro的一天【BB Time第521期】`. No `LONG_PRESS`, `LONG_CLICK`, like, coin, or favorite action was performed in this search run. Exact first-result ordering, playback, and backend state were not independently verified. The successful triple-action proof below remains specifically a version 0.3.6 result.
+
+These live runs exercised context-aware decisions, effect observations, loading waits, and stale-screen refreshes. They did not encounter the `NO_VISIBLE_CHANGE` recovery path. The deterministic Samsung test verifies that the no-effect result and exclusion reach the next decision and permit an alternative action; successful recovery by a live model from that condition remains unverified.
 
 ## Version 0.3.6 configurable hold duration
 
@@ -179,11 +217,11 @@ Device tests use a **deterministic `DecisionProvider`** and execute real Android
 
 ## Not yet verified
 
-- Offline unit tests and instrumented smoke tests use fixture responses or deterministic providers. The separate 0.3.4 and 0.3.6 live DeepSeek checks above used one user-configured account; live Jev responses, other account/model combinations, general Chinese-language accuracy, model latency, and billing remain unverified.
+- Offline unit tests and instrumented smoke tests use fixture responses or deterministic providers. The separate 0.3.4, 0.3.6, and 0.3.7 live DeepSeek checks above used one user-configured account; live Jev responses, other account/model combinations, general Chinese-language accuracy, model latency, and billing remain unverified.
 - Live Bilibili runs reached a TESTV video detail page and, on version 0.3.6, verified the three selected controls after one configured four-second hold. Exact first-result ordering, backend coin amount or transaction, and a general success rate remain unverified. The search preset still has no independent outcome verifier and returns `UNVERIFIED`; the triple-action preset now verifies its visible final state.
 - macOS setup instructions are included, but the project has not been built or run on a Mac in this validation session.
 - Physical Xiaomi testing has not been performed. HyperOS permissions, background behavior, and third-party app task success rates have not been verified.
-- Android version coverage is incomplete. API 26 is the declared minimum; completed device tests cover API 36 for versions 0.3.1 through 0.3.6, and API 33 for the earlier baseline.
+- Android version coverage is incomplete. API 26 is the declared minimum; completed device tests cover API 36 for versions 0.3.1 through 0.3.7, and API 33 for the earlier baseline. Live model recovery after `NO_VISIBLE_CHANGE` remains unverified; version 0.3.7 live checks covered Save text and Bilibili loading/search behavior.
 - SDK artifacts have not been published to Maven Central or an app store. The source is MIT-licensed; the artifact and group coordinates currently exist only in the local Maven distribution.
 
 ## Local reports
@@ -191,8 +229,11 @@ Device tests use a **deterministic `DecisionProvider`** and execute real Android
 - `core/build/reports/tests/test/index.html`
 - `sdk/build/reports/tests/testDebugUnitTest/index.html`
 - `sample/build/reports/tests/testDebugUnitTest/index.html`
+- `sample/build/reports/samsung-replanning-0.3.7.txt` (current five-test device result with observed-effect replanning)
+- `sample/build/reports/deepseek-save-live-0.3.7.txt` (sanitized live Save-text check with verified outcome)
+- `sample/build/reports/deepseek-search-live-0.3.7.txt` (sanitized live Bilibili search check with loading waits)
 - `sample/build/reports/deepseek-triple-live-0.3.6.txt` (sanitized successful live DeepSeek triple-action check)
-- `sample/build/reports/samsung-hold-0.3.6.txt` (current two-test result, including the measured four-second local hold)
+- `sample/build/reports/samsung-hold-0.3.6.txt` (previous two-test result, including the measured four-second local hold)
 - `sample/build/reports/deepseek-triple-live-0.3.5.txt` (previous accepted two-second hold followed by a blocked outcome)
 - `sample/build/reports/samsung-smoke-0.3.5.txt` (previous three-test device smoke result)
 - `sample/build/reports/deepseek-live-0.3.4.txt` (sanitized live DeepSeek check record)

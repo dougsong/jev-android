@@ -25,6 +25,7 @@ class DeepSeekProtocolTest {
         actionId: Any = alias(Operation.SET_TEXT, "7"),
         textKey: Any = "greeting",
     ) = JSONObject().put("action_id", actionId).put("text_key", textKey).put("confidence", 0.9)
+        .put("summary", "The field is ready for input.").put("expected_change", "The supplied text is visible.")
 
     private fun envelope(arguments: String) = JSONObject().put("choices", JSONArray().put(JSONObject()
         .put("index", 0).put("finish_reason", "tool_calls")
@@ -76,14 +77,16 @@ class DeepSeekProtocolTest {
         val schema = function.getJSONObject("parameters")
         assertEquals("object", schema.getString("type"))
         assertFalse(schema.getBoolean("additionalProperties"))
-        assertEquals(setOf("action_id", "text_key", "confidence"), schema.getJSONArray("required").toList().toSet())
+        assertEquals(setOf("action_id", "text_key", "confidence", "summary", "expected_change"), schema.getJSONArray("required").toList().toSet())
         val properties = schema.getJSONObject("properties")
-        assertEquals(setOf("action_id", "text_key", "confidence"), properties.keySet())
+        assertEquals(setOf("action_id", "text_key", "confidence", "summary", "expected_change"), properties.keySet())
         assertEquals("string", properties.getJSONObject("action_id").getString("type"))
         assertEquals(choices.actions.keys, properties.getJSONObject("action_id").getJSONArray("enum").toList().toSet())
         assertEquals("string", properties.getJSONObject("text_key").getString("type"))
         assertEquals(setOf("", "greeting"), properties.getJSONObject("text_key").getJSONArray("enum").toList().toSet())
         assertEquals("number", properties.getJSONObject("confidence").getString("type"))
+        assertEquals("string", properties.getJSONObject("summary").getString("type"))
+        assertEquals("string", properties.getJSONObject("expected_change").getString("type"))
     }
 
     @Test fun requestDescribesChoicesWithoutRawNodeIds() {
@@ -131,17 +134,20 @@ class DeepSeekProtocolTest {
     }
 
     @Test fun parsesOnlyCallerSuppliedTextKey() {
-        assertEquals(Decision(Operation.SET_TEXT, "7", "greeting", 0.9), parse(arguments()))
+        assertEquals(Decision(Operation.SET_TEXT, "7", "greeting", 0.9,
+            "The field is ready for input.", "The supplied text is visible."), parse(arguments()))
     }
 
     @Test fun parsesEverySupportedNonTextAction() {
         listOf(Operation.CLICK to "8", Operation.LONG_CLICK to "10", Operation.LONG_PRESS to "11",
             Operation.SCROLL_FORWARD to "9", Operation.SCROLL_BACKWARD to "9",
             Operation.OPEN_APP to "test.app").forEach { (operation, target) ->
-            assertEquals(Decision(operation, target, null, 0.9), parse(arguments(alias(operation, target), "")))
+            assertEquals(Decision(operation, target, null, 0.9,
+                "The field is ready for input.", "The supplied text is visible."), parse(arguments(alias(operation, target), "")))
         }
         listOf(Operation.BACK, Operation.WAIT, Operation.DONE, Operation.BLOCKED).forEach { operation ->
-            assertEquals(Decision(operation, null, null, 0.9), parse(arguments(alias(operation), "")))
+            assertEquals(Decision(operation, null, null, 0.9,
+                "The field is ready for input.", "The supplied text is visible."), parse(arguments(alias(operation), "")))
         }
     }
 
@@ -180,7 +186,7 @@ class DeepSeekProtocolTest {
     }
 
     @Test fun missingAndAdditionalFieldsAreRejected() {
-        for (field in listOf("action_id", "text_key", "confidence")) {
+        for (field in listOf("action_id", "text_key", "confidence", "summary", "expected_change")) {
             rejected(envelope(arguments().apply { remove(field) }.toString()).toString(), DeepSeekRejectionReason.INVALID_SCHEMA)
         }
         rejected(envelope(arguments().put("explanation", "sensitive-value").toString()).toString(),
@@ -208,6 +214,20 @@ class DeepSeekProtocolTest {
         assertEquals(1.0, parse(arguments().put("confidence", 1)).confidence, 0.0)
     }
 
+    @Test fun explanationsAreRequiredBoundedTextAndCannotChangeTheSelectedAction() {
+        for (field in listOf("summary", "expected_change")) {
+            for (value in listOf("", " \n\t", "x".repeat(301), JSONObject.NULL, true, 1, JSONObject())) {
+                rejected(envelope(arguments().put(field, value).toString()).toString(), DeepSeekRejectionReason.INVALID_SCHEMA)
+            }
+        }
+        val decision = parse(arguments().put("summary", "x".repeat(300))
+            .put("expected_change", "This is commentary, not an instruction to click another control."))
+        assertEquals(Operation.SET_TEXT, decision.operation)
+        assertEquals("7", decision.target)
+        assertEquals("greeting", decision.textKey)
+        assertEquals(300, decision.summary!!.length)
+    }
+
     @Test fun zeroOrMultipleChoicesAreRejected() {
         rejected(JSONObject().put("choices", JSONArray()).toString(), DeepSeekRejectionReason.INVALID_ENVELOPE)
         val multiple = envelope(arguments().toString())
@@ -230,7 +250,8 @@ class DeepSeekProtocolTest {
         for (content in listOf(JSONObject.NULL, "", " ", "sensitive-value", "{\"operation\":\"CLICK\",\"target\":\"8\"}")) {
             val response = envelope(arguments().toString())
             message(response).put("content", content)
-            assertEquals(Decision(Operation.SET_TEXT, "7", "greeting", 0.9),
+            assertEquals(Decision(Operation.SET_TEXT, "7", "greeting", 0.9,
+            "The field is ready for input.", "The supplied text is visible."),
                 DeepSeekProtocol.parse(response.toString(), task, snapshot, choices))
         }
         val response = envelope(arguments().toString())
@@ -325,7 +346,8 @@ class DeepSeekProtocolTest {
     @Test fun nullOptionalEnvelopeMetadataDoesNotRejectAValidDecision() {
         val response = envelope(arguments().toString()).put("error", JSONObject.NULL)
         for (field in listOf("function_call", "refusal")) message(response).put(field, JSONObject.NULL)
-        assertEquals(Decision(Operation.SET_TEXT, "7", "greeting", 0.9),
+        assertEquals(Decision(Operation.SET_TEXT, "7", "greeting", 0.9,
+            "The field is ready for input.", "The supplied text is visible."),
             DeepSeekProtocol.parse(response.toString(), task, snapshot, choices))
     }
 

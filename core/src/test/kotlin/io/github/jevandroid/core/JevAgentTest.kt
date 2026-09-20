@@ -202,7 +202,8 @@ class JevAgentTest {
     }
     @Test fun acceptedActionResetsTheConsecutiveRefreshLimit() = runTest {
         val runtime = ResultRuntime(snapshot) { device, _, _ ->
-            device.snapshot = device.snapshot.copy(fingerprint = "v${device.attempts.size + 1}")
+            device.snapshot = device.snapshot.copy(fingerprint = "v${device.attempts.size + 1}",
+                elements = snapshot.elements.map { it.copy(value = "state ${device.attempts.size}") })
             if (device.attempts.size % 4 == 0) ActionResult.Accepted else ActionResult.StaleBeforeDispatch
         }
         val p = object : DecisionProvider {
@@ -301,10 +302,10 @@ class JevAgentTest {
         try { DecisionRules.validate(task, snapshot, Decision(Operation.SET_TEXT, "2", "invented")); fail() }
         catch (_: IllegalArgumentException) { }
     }
-    @Test fun repeatedUnchangedScreensStop() = runTest {
+    @Test fun unchangedWaitsUseTheDecisionBudgetWithoutTheOldFiveCycleBlock() = runTest {
         val runtime = FakeRuntime(snapshot)
-        assertEquals(Status.BLOCKED, JevAgent(runtime, provider(Decision(Operation.WAIT))).run(task).status)
-        assertEquals(5, runtime.mutations)
+        assertEquals(Status.LIMIT_REACHED, JevAgent(runtime, provider(Decision(Operation.WAIT))).run(task.copy(maxSteps = 9)).status)
+        assertEquals(9, runtime.mutations)
     }
     @Test fun stepBudgetIsBounded() = runTest {
         val runtime = FakeRuntime(snapshot)

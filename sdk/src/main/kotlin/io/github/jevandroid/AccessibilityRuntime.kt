@@ -49,6 +49,8 @@ class AccessibilityRuntime(private val service: AccessibilityService) : Detailed
     override suspend fun executeWithResult(task: Task, snapshot: UiSnapshot, decision: Decision): ActionResult = withContext(Dispatchers.Main.immediate) {
         currentCoroutineContext().ensureActive()
         DecisionRules.validate(task, snapshot, decision)
+        // WAIT submits no UI action and remains valid while a page is loading/changing.
+        if (decision.operation == Operation.WAIT) return@withContext ActionResult.Accepted
         val fresh = capture(task)
         try {
             // This is the only retryable result: no Android action has been submitted yet.
@@ -218,7 +220,7 @@ class AccessibilityRuntime(private val service: AccessibilityService) : Detailed
                 if (text.isNotBlank() || label.isNotBlank() || operations.isNotEmpty()) {
                     val element = Element(path, label, node.className?.toString().orEmpty(), text,
                         if (node.isCheckable) node.isChecked else null, operations,
-                        node.viewIdResourceName?.take(300))
+                        node.viewIdResourceName?.take(300), node.isSelected)
                     elements += element
                     nodes[path] = AccessibilityNodeInfo.obtain(node)
                     if (holdTarget != null) longPressTargets[path] = holdTarget

@@ -35,6 +35,7 @@ class ProviderTransportTest {
         val choices = DeepSeekChoices.create(task, snapshot)
         val arguments = JSONObject().put("action_id", choices.actions.entries.single { it.value.operation == Operation.WAIT }.key)
             .put("text_key", "").put("confidence", 0.8)
+            .put("summary", "The page is loading.").put("expected_change", "Loading completes.")
         val call = JSONObject().put("id", "call_fixture").put("type", "function")
             .put("function", JSONObject().put("name", "select_action").put("arguments", arguments.toString()))
         return JSONObject().put("choices", JSONArray().put(JSONObject().put("finish_reason", "tool_calls")
@@ -67,7 +68,8 @@ class ProviderTransportTest {
     @Test fun deepSeekProviderSendsBearerAndParsesStrictSelection() = runBlocking {
         server.enqueue(MockResponse().setBody(response()))
         val provider = DeepSeekProvider("fixture-key", "fixture-model", ProviderTransport(), server.url("/chat/completions").toString())
-        assertEquals(Decision(Operation.WAIT, confidence = 0.8), provider.decide(task, snapshot, emptyList()))
+        assertEquals(Decision(Operation.WAIT, confidence = 0.8,
+            summary = "The page is loading.", expectedChange = "Loading completes."), provider.decide(task, snapshot, emptyList()))
         val received = server.takeRequest(2, TimeUnit.SECONDS)!!
         assertEquals("POST", received.method)
         assertEquals("/chat/completions", received.path)

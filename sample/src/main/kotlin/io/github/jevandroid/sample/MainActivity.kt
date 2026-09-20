@@ -33,7 +33,7 @@ class MainActivity : Activity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         val column = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(32, 32, 32, 32) }
         setContentView(ScrollView(this).apply { addView(column) })
-        column.addView(TextView(this).apply { text = "Jev Android SDK · 0.3.6"; textSize = 25f })
+        column.addView(TextView(this).apply { text = "Jev Android SDK · 0.3.7"; textSize = 25f })
         status = TextView(this).apply { text = "Ready"; textSize = 16f }
         column.addView(status)
         column.addView(TextView(this).apply { text = "Decision provider" })
@@ -170,13 +170,9 @@ class MainActivity : Activity() {
                         gate = triplePolicy ?: ActionGate { _, _, _ -> true },
                         onEvent = { event ->
                             triplePolicy?.onEvent(event)?.let(::append)
-                            append(when (event) {
-                            is AgentEvent.Observed -> "Observed ${event.packageName}: ${event.elementCount} elements"
-                            is AgentEvent.Chosen -> "Selected ${event.decision.operation}, confidence=${event.decision.confidence}"
-                            is AgentEvent.Refreshing -> "UI changed before ${event.operation}; no action sent. Observing again (${event.attempt}/3)."
-                            is AgentEvent.Executed -> "Step ${event.record.step}: accepted=${event.record.accepted}"
-                            is AgentEvent.Finished -> "${event.result.status}: ${triplePolicy?.messageFor(event.result) ?: event.result.message}"
-                        }) },
+                            append(AgentEventFormatter.format(event,
+                                (event as? AgentEvent.Finished)?.let { triplePolicy?.messageFor(it.result) }))
+                        },
                         onError = { error -> append(if (error is DeepSeekResponseException) requireNotNull(error.message)
                             else "Failed: ${error.javaClass.simpleName} ${error.message}") })
                     run.join()

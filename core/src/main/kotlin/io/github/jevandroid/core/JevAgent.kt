@@ -17,7 +17,8 @@ class JevAgent(
     /**
      * Cancel the calling coroutine to stop. Provider/runtime exceptions propagate, without retrying mutations.
      * At most three consecutive pre-dispatch stale decisions are refreshed. These consume decision cycles
-     * but are not recorded as executed steps, because no action reached the UI.
+     * but are not recorded as executed steps, because no action reached the UI. Accepted actions are
+     * observed before replanning; identical ineffective actions on an unchanged page are not dispatched again.
      */
     suspend fun run(task: Task, onEvent: (AgentEvent) -> Unit = {}): RunResult {
         check(running.tryLock()) { "This agent is already running" }
@@ -25,24 +26,45 @@ class JevAgent(
         try {
             val result = withTimeoutOrNull(task.timeoutMillis) {
                 val history = mutableListOf<StepRecord>()
-                var unchanged = 0
-                var previous: String? = null
+                val progress = ProgressTracker()
                 var consecutiveRefreshes = 0
+                var consecutiveReplans = 0
+                var replanReason: String? = null
                 repeat(task.maxSteps) { cycle ->
                     currentCoroutineContext().ensureActive()
                     val snapshot = runtime.observe(task)
-                    unchanged = if (snapshot.fingerprint == previous) unchanged + 1 else 0
-                    previous = snapshot.fingerprint
-                    if (unchanged >= 5) return@withTimeoutOrNull RunResult(Status.BLOCKED, steps, "No UI progress in five cycles")
+                    progress.observe(snapshot)?.let { onEvent(AgentEvent.Evaluated(it)) }
                     onEvent(AgentEvent.Observed(steps, snapshot.packageName, snapshot.elements.size))
-                    val decision = provider.decide(task, snapshot, history.takeLast(10))
+                    val context = progress.context(replanReason)
+                    val decision = provider.decideWithContext(task, snapshot, history.takeLast(10), context)
                     DecisionRules.validate(task, snapshot, decision)
                     onEvent(AgentEvent.Chosen(steps, decision))
-                    if (decision.confidence < task.minimumConfidence)
-                        return@withTimeoutOrNull RunResult(Status.BLOCKED, steps, "Decision confidence below threshold")
                     currentCoroutineContext().ensureActive()
+                    val problem = when {
+                        progress.isExcluded(decision) ->
+                            "This action was already accepted without visible change on this page. " +
+                                "Inspect the current page and prior results; choose a different supported action, WAIT for loading, or report completion/blockage."
+                        decision.confidence < task.minimumConfidence ->
+                            "The proposed action is below the confidence threshold. Inspect the current page and prior results " +
+                                "to choose a supported next action or explain blockage; do not raise confidence without new evidence."
+                        else -> null
+                    }
+                    if (problem != null) {
+                        if (consecutiveReplans >= 2) return@withTimeoutOrNull RunResult(
+                            Status.BLOCKED, steps,
+                            "No supported next action after two page-based replans; no action was sent for the discarded proposals",
+                        )
+                        consecutiveReplans++
+                        replanReason = problem
+                        onEvent(AgentEvent.Replanning(steps, problem, consecutiveReplans))
+                        delay(250)
+                        return@repeat
+                    }
+                    consecutiveReplans = 0
+                    replanReason = null
                     when (decision.operation) {
-                        Operation.BLOCKED -> return@withTimeoutOrNull RunResult(Status.BLOCKED, steps, "Provider cannot progress")
+                        Operation.BLOCKED -> return@withTimeoutOrNull RunResult(Status.BLOCKED, steps,
+                            decision.summary?.let { "Provider stopped: $it" } ?: "Provider cannot progress")
                         Operation.DONE -> {
                             val fresh = runtime.observe(task)
                             val verified = verifier?.verify(task, fresh) == true
@@ -78,7 +100,17 @@ class JevAgent(
                             // Failed or uncertain mutations are never blindly repeated.
                             if (actionResult is ActionResult.Rejected)
                                 return@withTimeoutOrNull RunResult(Status.BLOCKED, steps, actionResult.reason)
-                            delay(if (decision.operation == Operation.WAIT) 600 else 250)
+                            // Observe first; accepted=true acknowledges dispatch, not task success.
+                            val settleBudget = if (decision.operation == Operation.WAIT) 600L else task.settleTimeoutMillis
+                            var observedFor = 0L
+                            var after: UiSnapshot
+                            do {
+                                val pause = minOf(250L, settleBudget - observedFor)
+                                if (pause > 0) { delay(pause); observedFor += pause }
+                                currentCoroutineContext().ensureActive()
+                                after = runtime.observe(task)
+                            } while (samePage(snapshot, after) && observedFor < settleBudget)
+                            onEvent(AgentEvent.Evaluated(progress.record(decision, snapshot, after, observedFor)))
                         }
                     }
                 }

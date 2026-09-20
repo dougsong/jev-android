@@ -24,9 +24,9 @@ class DeepSeekRepairTest {
     private val choices = DeepSeekChoices.create(task, snapshot)
     private fun selection(operation: Operation): String = JSONObject()
         .put("action_id", choices.actions.entries.single { it.value.operation == operation }.key)
-        .put("text_key", "").put("confidence", 0.9).toString()
+        .put("text_key", "").put("confidence", 0.9)
+        .put("summary", "Save is visible.").put("expected_change", "Saved status is visible.").toString()
     private val valid = selection(Operation.CLICK)
-    private val done = selection(Operation.DONE)
 
     private fun envelope(content: String, finish: String = "tool_calls", refusal: String? = null): String {
         val call = JSONObject().put("id", "call_fixture").put("type", "function")
@@ -49,7 +49,8 @@ class DeepSeekRepairTest {
         val history = listOf(StepRecord(1, Operation.WAIT, null, true))
         val bad = JSONObject(valid).put("explanation", "private-invalid-model-output").toString()
         val calls = ScriptedCalls(listOf(Reply(envelope(bad)), Reply(envelope(valid))))
-        assertEquals(Decision(Operation.CLICK, "0.1", confidence = 0.9), provider(calls).decide(task, snapshot, history))
+        assertEquals(Decision(Operation.CLICK, "0.1", confidence = 0.9,
+            summary = "Save is visible.", expectedChange = "Saved status is visible."), provider(calls).decide(task, snapshot, history))
         assertEquals(2, calls.calls.size)
         val first = payload(calls.calls[0])
         val second = payload(calls.calls[1])
@@ -127,11 +128,16 @@ class DeepSeekRepairTest {
     }
 
     @Test fun noUiActionIsSentUntilTheCorrectedDecisionPassesValidation() = runBlocking {
+        val saved = snapshot.copy(elements = snapshot.elements + Element("0.2", "Saved", "TextView", "", null, emptySet()))
+        val savedChoices = DeepSeekChoices.create(task, saved)
+        val done = JSONObject(valid).put("action_id", savedChoices.actions.entries.single {
+            it.value.operation == Operation.DONE
+        }.key).toString()
         val calls = ScriptedCalls(listOf(Reply(envelope(JSONObject(valid).put("action_id", "not-a-candidate").toString())),
             Reply(envelope(valid)), Reply(envelope(done))))
         var mutations = 0
         val runtime = object : DeviceRuntime {
-            override suspend fun observe(task: Task) = snapshot
+            override suspend fun observe(task: Task) = if (mutations == 0) snapshot else saved
             override suspend fun execute(task: Task, snapshot: UiSnapshot, decision: Decision): Boolean {
                 assertEquals(2, calls.calls.size)
                 assertEquals("0.1", decision.target)

@@ -41,6 +41,43 @@ class BilibiliTriplePolicyTest {
         assertTrue(policy.allow(task, snapshot(), Decision(Operation.OPEN_APP, "tv.danmaku.bili")))
     }
 
+    @Test fun navigationForwardsPageFeedbackAndExcludedActionsToTheContextualProvider() = runBlocking {
+        val policy = BilibiliTriplePolicy()
+        val previous = Decision(Operation.CLICK, "search")
+        val feedback = ActionFeedback(previous, snapshot().elements.single { it.id == "search" },
+            ObservationOutcome.NO_VISIBLE_CHANGE, 1_500)
+        val context = DecisionContext(lastAction = feedback,
+            excludedActions = listOf(ActionSignature(Operation.CLICK, "search")),
+            replanReason = "The previous click produced no visible change.")
+        var observedContext: DecisionContext? = null
+        val next = Decision(Operation.WAIT, summary = "The search page is still loading.",
+            expectedChange = "The search field becomes visible.")
+        val provider = policy.provider(object : ContextualDecisionProvider {
+            override suspend fun decide(
+                task: Task, snapshot: UiSnapshot, history: List<StepRecord>, context: DecisionContext,
+            ): Decision {
+                observedContext = context
+                return next
+            }
+        })
+        assertEquals(next, provider.decideWithContext(task, snapshot(), emptyList(), context))
+        assertSame(context, observedContext)
+        assertTrue(observedContext!!.excludedActions.single().matches(previous))
+    }
+
+    @Test fun pageFeedbackCannotBypassTheSingleHoldProtection() = runBlocking {
+        val policy = BilibiliTriplePolicy()
+        assertTrue(policy.allow(task, snapshot(), hold)); executed(policy)
+        val feedback = ActionFeedback(hold, snapshot().elements.single { it.id == "like" },
+            ObservationOutcome.NO_VISIBLE_CHANGE, 1_500)
+        val context = DecisionContext(lastAction = feedback,
+            excludedActions = listOf(ActionSignature(Operation.LONG_PRESS, "like")),
+            replanReason = "Choose another action based on the current page.")
+        assertEquals(Operation.WAIT,
+            policy.provider(noModel()).decideWithContext(task, snapshot(), emptyList(), context).operation)
+        assertFalse(policy.allow(task, snapshot(), hold))
+    }
+
     @Test fun nativeLongClickAndSeparateControlClicksAreBlocked() = runBlocking {
         for (id in listOf("like", "coin", "favorite")) {
             assertFalse(BilibiliTriplePolicy().allow(task, snapshot(), Decision(Operation.CLICK, id)))
