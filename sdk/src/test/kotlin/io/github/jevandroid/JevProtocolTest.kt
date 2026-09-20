@@ -59,4 +59,14 @@ class JevProtocolTest {
         val q = JevProtocol.request(task.copy(textValues = emptyMap()), snapshot, emptyList(), "jev-latest").getJSONObject("questions")
         assertFalse(q.has("text_value")); assertFalse(q.getJSONObject("operation").getJSONObject("criteria").has("SET_TEXT"))
     }
+    @Test fun requestFiltersOffAllowlistUiAndAppsAndBoundsHistory() {
+        val history = (1..30).map { StepRecord(it, Operation.CLICK, "element-$it", true) }
+        val observed = snapshot.copy(packageName = "other.app", apps = mapOf("test.app" to "Test", "other.app" to "Other"))
+        val request = JevProtocol.request(task, observed, history, "jev-latest")
+        assertEquals(0, request.getJSONObject("state").getJSONArray("elements").length())
+        assertEquals(10, request.getJSONObject("state").getJSONArray("recent_actions").length())
+        val questions = request.getJSONObject("questions")
+        assertFalse(questions.has("click_target"))
+        assertEquals(setOf("test.app"), questions.getJSONObject("open_app_target").getJSONObject("criteria").keySet())
+    }
 }

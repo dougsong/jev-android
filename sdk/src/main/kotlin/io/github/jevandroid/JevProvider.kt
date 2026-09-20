@@ -1,59 +1,34 @@
 package io.github.jevandroid
 
 import io.github.jevandroid.core.*
-import kotlinx.coroutines.suspendCancellableCoroutine
-import okhttp3.*
+import okhttp3.Request
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.IOException
-import java.util.concurrent.TimeUnit
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
 
 /** Calls TypeSafe directly. Keys and raw UI state are never logged by the SDK. */
 class JevProvider(
     private val apiKey: String,
     private val model: String = "jev-latest",
 ) : DecisionProvider {
-    init { require(apiKey.isNotBlank()); require(model.isNotBlank()) }
-    private val client = OkHttpClient.Builder()
-        .callTimeout(25, TimeUnit.SECONDS)
-        .followRedirects(false).followSslRedirects(false)
-        .retryOnConnectionFailure(false).build()
+    init {
+        require(apiKey.isNotBlank() && apiKey.all { it in ' '..'~' }) { "Invalid API key" }
+        require(model.isNotBlank()) { "Invalid model" }
+    }
+    private val transport = ProviderTransport()
 
     override suspend fun decide(task: Task, snapshot: UiSnapshot, history: List<StepRecord>): Decision {
         val payload = JevProtocol.request(task, snapshot, history, model)
         val request = Request.Builder().url("https://api.typesafe.ai/v1/systemone")
             .header("Authorization", "Bearer $apiKey")
             .post(payload.toString().toRequestBody("application/json".toMediaType())).build()
-        val raw = suspendCancellableCoroutine<String> { continuation ->
-            val call = client.newCall(request)
-            continuation.invokeOnCancellation { call.cancel() }
-            call.enqueue(object : Callback {
-                override fun onFailure(call: Call, e: IOException) {
-                    if (!continuation.isCancelled) continuation.resumeWithException(IOException("Jev request failed", e))
-                }
-                override fun onResponse(call: Call, response: Response) {
-                    try {
-                        response.use {
-                            check(it.isSuccessful) { "Jev HTTP ${it.code}" }
-                            val body = requireNotNull(it.body)
-                            // Bound responses even if Content-Length is missing.
-                            val source = body.source()
-                            source.request(1_048_577)
-                            check(source.buffer.size <= 1_048_576) { "Jev response too large" }
-                            val value = source.readUtf8()
-                            if (!continuation.isCancelled) continuation.resume(value)
-                        }
-                    } catch (e: Exception) {
-                        if (!continuation.isCancelled) continuation.resumeWithException(e)
-                    }
-                }
-            })
+        val raw = transport.execute(request, "Jev")
+        return try {
+            JevProtocol.parse(JSONObject(raw), payload).also { DecisionRules.validate(task, snapshot, it) }
+        } catch (_: Exception) {
+            throw IllegalArgumentException("Jev response rejected")
         }
-        return JevProtocol.parse(JSONObject(raw), payload)
     }
 }
 
@@ -66,13 +41,13 @@ internal object JevProtocol {
             .put("BLOCKED", "No supported action can progress")
         val state = JSONObject()
             .put("package", snapshot.packageName)
-            .put("elements", JSONArray(snapshot.elements.map { element ->
+            .put("elements", JSONArray(snapshot.elements.filter { snapshot.packageName in task.allowedPackages }.map { element ->
                 JSONObject().put("id", element.id).put("label", element.label)
                     .put("role", element.role).put("value", element.value)
                     .put("checked", element.checked ?: JSONObject.NULL)
                     .put("operations", JSONArray(element.operations.map { it.name }))
             }))
-            .put("recent_actions", JSONArray(history.map {
+            .put("recent_actions", JSONArray(history.takeLast(10).map {
                 JSONObject().put("operation", it.operation.name).put("target", it.target)
                     .put("accepted", it.accepted)
             }))
@@ -90,9 +65,10 @@ internal object JevProtocol {
                 "If performing ${op.name}, choose the target. Goal: ${task.goal}. $rules",
             ))
         }
-        if (snapshot.apps.isNotEmpty()) {
+        val apps = snapshot.apps.filterKeys { it in task.allowedPackages }
+        if (apps.isNotEmpty()) {
             operations.put("OPEN_APP", "Open an allowed application if required for the goal")
-            questions.put("open_app_target", choice(JSONObject(snapshot.apps), "Choose app for goal: ${task.goal}"))
+            questions.put("open_app_target", choice(JSONObject(apps), "Choose app for goal: ${task.goal}"))
         }
         if (snapshot.packageName in task.allowedPackages) operations.put("BACK", "Navigate back once")
         if (operations.has("SET_TEXT"))

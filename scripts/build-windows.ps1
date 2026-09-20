@@ -1,6 +1,6 @@
 param(
     [string]$JavaHome = $env:JAVA_HOME,
-    [string[]]$Tasks = @(':core:test', ':sdk:testDebugUnitTest', ':sdk:assembleRelease', ':sample:assembleDebug', ':sdk:lintDebug', ':sample:lintDebug', ':core:publishCorePublicationToLocalBuildRepository', ':sdk:publishReleasePublicationToLocalBuildRepository')
+    [string[]]$Tasks = @(':core:test', ':sdk:testDebugUnitTest', ':sample:testDebugUnitTest', ':sdk:assembleRelease', ':sample:assembleDebug', ':sdk:lintDebug', ':sample:lintDebug', ':core:publishCorePublicationToLocalBuildRepository', ':sdk:publishReleasePublicationToLocalBuildRepository')
 )
 $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path

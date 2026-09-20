@@ -4,4 +4,4 @@ plugins {
     kotlin("android") version "2.0.21" apply false
     kotlin("jvm") version "2.0.21" apply false
 }
-allprojects { group = "io.github.jevandroid"; version = "0.1.0" }
+allprojects { group = "io.github.jevandroid"; version = "0.2.0" }

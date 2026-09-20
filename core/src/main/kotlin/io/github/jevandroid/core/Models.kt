@@ -21,7 +21,7 @@ data class UiSnapshot(
 data class Task(
     val goal: String,
     val allowedPackages: Set<String>,
-    /** Named literal values. Jev selects a key; it never invents text. */
+    /** Named literal values. Providers select a key instead of inventing text. */
     val textValues: Map<String, String> = emptyMap(),
     val maxSteps: Int = 30,
     val timeoutMillis: Long = 120_000,
@@ -41,6 +41,7 @@ data class Decision(
     val operation: Operation,
     val target: String? = null,
     val textKey: String? = null,
+    /** Provider-specific score; DeepSeek self-reports it, so it is not a calibrated probability. */
     val confidence: Double = 1.0,
 )
 

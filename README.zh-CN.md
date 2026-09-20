@@ -2,15 +2,15 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-可接入 Android 项目的 Kotlin UI Agent SDK。**TypeSafe Jev** 从当前屏幕的真实控件中选择操作，再由 Android 无障碍服务执行。项目包含示例 App 和无需目标应用账号的本地测试页面。
+可接入 Android 项目的 Kotlin UI Agent SDK。**TypeSafe Jev 或 DeepSeek** 从当前屏幕的真实控件中选择操作，再由 Android 无障碍服务执行。两个后端都能独立完成任务：使用 DeepSeek API Key 无需 Jev 账号，使用 Jev 则填写 TypeSafe Key。项目包含示例 App 和无需目标应用账号的本地测试页面。
 
-这是首个版本，API 尚未稳定。项目未发布到 Maven Central；下文的依赖坐标仅适用于本项目生成的本地 Maven 仓库。示例 App 界面和代码保持英文。
+API 尚未稳定。项目未发布到 Maven Central；下文的依赖坐标仅适用于本项目生成的本地 Maven 仓库。示例 App 界面和代码保持英文。
 
 ## 功能与限制
 
-- 动态构建动作表。一次 Jev 请求同时选择操作及各类操作的目标，仅执行最终选中的分支。
+- 根据可读取的控件动态构建动作表。Jev 通过一次请求中的多个问题选择操作与目标；DeepSeek 通过 JSON 输出选择动作。两者共用执行循环和检查机制。
 - 支持点击、替换输入框内容、前后滚动、返回、打开允许的应用、等待，以及报告完成或受阻。
-- Jev 不生成文字。调用方通过 `Task.textValues` 提供命名的准确候选值，由 Jev 选择；无需 DeepSeek Key。
+- 本 SDK 的两个后端均不生成任意输入文字。调用方通过 `Task.textValues` 提供命名的准确候选值，由选中的模型选择；只需要当前后端的 API Key。
 - 执行前重新读取屏幕并比较指纹。页面过期时停止任务，避免把旧节点编号用于变化后的界面。
 - 输入后读取控件并验证完整值。操作被拒绝时停止，不自动重复执行。
 - 提供包名白名单、步骤和时间限制、最低置信度、无进展检测及宿主自定义操作策略。
@@ -24,10 +24,21 @@
 | 模块 | 作用 |
 |---|---|
 | `core` | 与平台无关的任务模型、决策接口、执行循环、验证和事件 |
-| `sdk` | TypeSafe HTTP/JSON 接口、无障碍运行时、服务及停止按钮 |
-| `sample` | API 配置、授权设置入口、任务执行、结果日志和本地测试页面 |
+| `sdk` | Jev 与 DeepSeek HTTP/JSON 接口、无障碍运行时、服务及停止按钮 |
+| `sample` | 后端与模型选择、API 配置、授权设置入口、任务执行、结果日志和本地测试页面 |
 
-执行流程：读取控件 → 构建有效选项 → Jev 选择动作 → 检查宿主策略 → 确认页面未过期 → 执行动作 → 观察结果。
+执行流程：读取控件 → 构建有效选项 → 所选后端选择动作 → 检查宿主策略 → 确认页面未过期 → 执行动作 → 观察结果。
+
+## 选择后端
+
+| 后端 | SDK 提供者 | 所需密钥 | 默认模型 |
+|---|---|---|---|
+| Jev (TypeSafe) | `JevProvider` | TypeSafe API Key | `jev-latest` |
+| DeepSeek | `DeepSeekProvider` | DeepSeek API Key | `deepseek-flash` |
+
+DeepSeek 调用 `https://api.deepseek.com/chat/completions`，使用 JSON 模式并关闭思考以降低决策延迟。模型从当前页面允许的动作和调用方提供的文字候选中进行选择；它直接负责 UI 决策，不是单独的文字生成步骤。两个提供者均接受自定义 `model`，请选用账号可访问、且兼容对应请求格式的模型。参见 [DeepSeek API 文档](https://api-docs.deepseek.com/api/create-chat-completion/)。
+
+共用的最低置信度阈值在两个后端中含义不同。Jev 返回给定选项的概率分布；DeepSeek 必须在 JSON 响应中给出自报的置信度。DeepSeek 的数值未经校准，不能与 Jev 的概率直接比较，两者也都不能证明动作正确。需要更强保证的决策应依靠宿主策略和结果验证。
 
 ## 构建
 
@@ -70,7 +81,7 @@ java -version
 **4. 构建并运行离线检查。** 在项目根目录执行：
 
 ```bash
-./gradlew :core:test :sdk:testDebugUnitTest :sdk:assembleRelease :sample:assembleDebug
+./gradlew :core:test :sdk:testDebugUnitTest :sample:testDebugUnitTest :sdk:assembleRelease :sample:assembleDebug
 ./gradlew :sdk:lintDebug :sample:lintDebug
 ```
 
@@ -84,7 +95,7 @@ adb install -r sample/build/outputs/apk/debug/sample-debug.apk
 adb shell am start -n io.github.jevandroid.sample/.MainActivity
 ```
 
-目标状态应为 `device`，不能是 `unauthorized` 或 `offline`。连接多个设备时，在安装和启动命令的 `adb` 后加上 `-s YOUR_DEVICE_SERIAL`。在 App 中填写 TypeSafe Key，手动开启无障碍服务，再选择 **Run on the built-in test page**，并保持设备解锁。密钥不要写入终端命令或提交到仓库。安装完成后，示例通过手机自己的网络连接模型，无需持续连接 Mac。
+目标状态应为 `device`，不能是 `unauthorized` 或 `offline`。连接多个设备时，在安装和启动命令的 `adb` 后加上 `-s YOUR_DEVICE_SERIAL`。在 App 中选择 **Jev (TypeSafe)** 或 **DeepSeek**，填写对应的 API Key，并阅读所选后端的数据说明。保留默认模型或填写兼容的自定义模型，手动开启无障碍服务，再选择 **Run on the built-in test page**，并保持设备解锁。密钥不要写入终端命令或提交到仓库。安装完成后，示例通过手机自己的网络连接模型，无需持续连接 Mac。
 
 可选：在专用模拟器或测试设备上运行设备测试：
 
@@ -92,7 +103,7 @@ adb shell am start -n io.github.jevandroid.sample/.MainActivity
 ./gradlew :sample:connectedDebugAndroidTest
 ```
 
-该任务会安装测试 APK、临时开启无障碍服务，并在结束后恢复之前的设置。它使用确定性决策提供者，不调用 Jev。请仅连接预期的测试设备，因为 Gradle 可能在多个已连接设备上运行测试。
+该任务会安装测试 APK、临时开启无障碍服务，并在结束后恢复之前的设置。它使用确定性决策提供者，不调用 Jev 或 DeepSeek。请仅连接预期的测试设备，因为 Gradle 可能在多个已连接设备上运行测试。
 
 **6. 接入其他 Android 项目。** 按下文的源码模块方式接入，或在 Mac 上生成本地 Maven 仓库：
 
@@ -107,7 +118,7 @@ adb shell am start -n io.github.jevandroid.sample/.MainActivity
 ### Windows
 
 ```powershell
-.\gradlew.bat :core:test :sdk:testDebugUnitTest :sdk:assembleRelease :sample:assembleDebug
+.\gradlew.bat :core:test :sdk:testDebugUnitTest :sample:testDebugUnitTest :sdk:assembleRelease :sample:assembleDebug
 .\gradlew.bat :sdk:lintDebug :sample:lintDebug
 ```
 
@@ -125,9 +136,9 @@ Linux 使用 `./gradlew`。项目设置了 `android.overridePathCheck=true`，�
 
 - `sample/build/outputs/apk/debug/sample-debug.apk`
 - `sdk/build/outputs/aar/sdk-release.aar`
-- `core/build/libs/core-0.1.0.jar`
+- `core/build/libs/core-0.2.0.jar`
 
-**AAR 不包含全部依赖。** SDK 还依赖 core 模块、协程和 OkHttp，建议按下面的源码模块或 Maven 方式接入。
+**AAR 不包含全部依赖。** SDK 还依赖 core 模块、协程、OkHttp 和 Gson，建议按下面的源码模块或 Maven 方式接入。
 
 ## 接入现有 Android 项目
 
@@ -157,7 +168,7 @@ maven { url = uri("vendor/jev-maven") }
 宿主 app 添加依赖：
 
 ```kotlin
-implementation("io.github.jevandroid:jev-android:0.1.0")
+implementation("io.github.jevandroid:jev-android:0.2.0")
 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 ```
 
@@ -182,7 +193,7 @@ implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 </service>
 ```
 
-将示例中的 `res/xml/jev_accessibility.xml` 和 `strings.xml` 中的说明字符串复制到宿主。先向用户说明可见页面文字会发送到 TypeSafe，再由用户通过 `Settings.ACTION_ACCESSIBILITY_SETTINGS` 开启服务。服务应与宿主 app 运行在同一进程。
+将示例中的 `res/xml/jev_accessibility.xml` 和 `strings.xml` 中的说明字符串复制到宿主。先向用户说明可见页面文字、任务和输入候选会发送到选中的后端（TypeSafe 或 DeepSeek），再由用户通过 `Settings.ACTION_ACCESSIBILITY_SETTINGS` 开启服务。服务应与宿主 app 运行在同一进程。
 
 ### 启动任务
 
@@ -214,15 +225,43 @@ job.cancel()
 
 在主线程调用，例如按钮回调。密钥从宿主配置读取，不要写入源码。上例演示 API 用法，不代表已验证 B 站流程成功率；实际应用中应将 `job.cancel()` 放在单独的停止按钮回调里。
 
+使用 DeepSeek 执行同一个任务时，引入 `DeepSeekProvider` 并将其作为 provider 传入，无需 TypeSafe Key，也不会调用 Jev：
+
+```kotlin
+import io.github.jevandroid.DeepSeekProvider
+import io.github.jevandroid.JevAccessibilityService
+import io.github.jevandroid.core.Task
+
+val service = JevAccessibilityService.connected.value
+    ?: error("Enable the accessibility service first")
+
+val job = service.start(
+    task = Task(
+        goal = "Open Bilibili, search for Xiaomi phone reviews, and stop on the search results screen",
+        allowedPackages = setOf("tv.danmaku.bili"),
+        textValues = mapOf("search_query" to "Xiaomi phone reviews"),
+        maxSteps = 20,
+    ),
+    provider = DeepSeekProvider(
+        apiKey = yourDeepSeekKey,
+        model = "deepseek-flash", // Optional; this is the default.
+    ),
+    onEvent = { event -> /* Update progress without logging input contents. */ },
+    onError = { error -> /* Show the error and allow manual takeover. */ },
+)
+```
+
+两个后端的主线程调用、取消和结果验证要求相同。此 DeepSeek 示例也仅演示 API；尚未通过真实 DeepSeek API 验证任务执行。
+
 `OutcomeVerifier` 接收新读取的 `UiSnapshot`，用于检查具体业务结果。示例会核对测试页面显示的保存值；验证器返回 false 时，结果为 `UNVERIFIED`。
 
-`ActionGate` 可以接入宿主确认界面或业务规则，返回 false 会停止任务。如果等待确认时页面发生变化，运行时仍会拒绝基于旧页面的动作。不要仅凭 Jev 自报的置信度授权敏感操作。
+`ActionGate` 可以接入宿主确认界面或业务规则，返回 false 会停止任务。如果等待确认时页面发生变化，运行时仍会拒绝基于旧页面的动作。不要仅凭后端返回的置信度授权敏感操作。
 
 实现 `DecisionProvider` 可以替换模型，实现 `DeviceRuntime` 可以用模拟设备测试。直接使用 `JevAgent` 时，由宿主负责协程生命周期、错误处理、停止控制和同一设备的互斥访问。通常使用 `JevAccessibilityService.start` 更方便，它限制每个服务只能运行一个任务。
 
 ## 在小米手机上试用
 
-1. 安装示例 debug APK，填入 **TypeSafe** Key。DeepSeek Key 不能调用 Jev。
+1. 安装示例 debug APK，选择 **Jev (TypeSafe)** 或 **DeepSeek**，填入对应的 API Key。模型栏默认值为 `jev-latest` 或 `deepseek-flash`，也可以填写兼容的自定义模型。请阅读所选后端的数据说明；DeepSeek 模式无需 TypeSafe 账号。
 2. 在系统设置中开启无障碍服务。不同 HyperOS 版本的菜单与限制可能不同，请以实际设备为准。
 3. 先点击 `2. Run on the built-in test page`，保持屏幕解锁。任务应输入 `Hello Jev`，点击 `Save`，并验证显示 `Saved: Hello Jev`。
 4. 点击右上角的 `Stop Jev` 可停止执行。返回示例主界面查看结果；只有 `VERIFIED` 表示通过了本地结果检查。
@@ -233,27 +272,28 @@ job.cancel()
 ## 数据处理与错误行为
 
 - 只读取白名单应用的可见控件。其他页面的快照仅包含前台包名和任务允许打开的应用列表。
-- 跳过密码节点及其子树。这不是完整的个人信息脱敏机制：允许应用内的其他可见文字可能含私人信息，并会发送到 TypeSafe。
-- 不上传截图，不把 API Key 发送给其他模型。HTTP 地址固定为 `https://api.typesafe.ai/v1/systemone`，禁用重定向和自动连接重试。
-- 单个快照最多包含 220 个元素，节点遍历也有上限。较长页面需要滚动；截断后未包含的控件不会提供给 Jev。
-- 示例 Key 仅保存在内存，不持久化或备份；配置页面禁止截图。SDK 不替宿主管理凭据。向其他用户分发时，建议使用用户自备 Key 或受控后端。
+- 跳过密码节点及其子树。这不是完整的个人信息脱敏机制：允许应用内的其他可见文字可能含私人信息。页面信息、任务目标、输入候选和任务历史会发送到选中的后端。
+- 不上传截图。各后端只将自己的 API Key 发送到对应的固定地址：Jev 使用 `https://api.typesafe.ai/v1/systemone`，DeepSeek 使用 `https://api.deepseek.com/chat/completions`。禁用重定向和自动连接重试；选择一个后端不会调用另一个后端。
+- 单个快照最多包含 220 个元素，节点遍历也有上限。较长页面需要滚动；截断后未包含的控件不会提供给任何模型。
+- 示例分别在内存中保存 Jev 与 DeepSeek 的 Key，切换后端不会复用另一个后端的密钥。密钥不持久化或备份；配置页面禁止截图。SDK 不替宿主管理凭据。向其他用户分发时，建议使用用户自备 Key 或受控后端。
 - HTTP、协议和运行时异常交给 `onError`；取消遵循协程取消语义，不作为成功返回。
 - 操作失败、页面过期、低置信度、gate 拒绝或无进展时返回 `BLOCKED`，不会静默重新提交操作。
 - 模型声称完成，以及 Android 返回 `performAction=true`，都不是业务结果成功的证据。
 
 ## 测试与后续工作
 
-离线测试覆盖取消、超时、步骤限制、白名单、无效目标、输入值限制、结果验证、低置信度、动作失败后停止且不重试，以及 Jev 响应的概率分布与分支校验。Android 构建和 lint 通过不等于真机任务成功，当前验证状态见 [VALIDATION.md](VALIDATION.md)。
+离线测试覆盖取消、超时、步骤限制、白名单、无效目标、输入值限制、结果验证、低置信度、动作失败后停止且不重试，以及 Jev 响应的概率分布与分支校验。DeepSeek 测试覆盖格式错误或被截断的响应、无效动作选项、HTTP 状态处理、响应大小限制及网络请求取消；示例测试检查切换后端时的密钥隔离。后端响应和 HTTP 行为使用离线样例与模拟请求验证，不调用真实 API。Android 构建和 lint 通过不等于真机任务成功，当前验证状态见 [VALIDATION.md](VALIDATION.md)。
 
-`:sample:connectedDebugAndroidTest` 在连接的模拟器或测试设备上使用确定性决策提供者，检查真实无障碍读取、输入、点击、结果验证、过期页面拒绝和白名单限制。测试会临时开启服务，并在结束后恢复原有无障碍设置。请仅在专用测试设备上运行；它不调用 Jev，也不能证明真实模型成功率。
+`:sample:connectedDebugAndroidTest` 在连接的模拟器或测试设备上使用确定性决策提供者，检查真实无障碍读取、输入、点击、结果验证、过期页面拒绝和白名单限制。测试会临时开启服务，并在结束后恢复原有无障碍设置。请仅在专用测试设备上运行；它不调用 Jev 或 DeepSeek，也不能证明真实模型成功率。本项目尚未通过真实 API 调用验证这两个后端。
 
-首阶段优先验证中文目标界面和小米真机。后续可加入截图辅助、DeepSeek 文本生成、更多输入控件、可拖动停止按钮和性能评测。通过 `JevProvider(model = "...")` 可以固定模型版本；默认 `jev-latest` 会跟随服务端更新。
+首阶段优先验证真实模型调用、中文目标界面和小米真机。后续可加入截图辅助、可选文字生成、更多输入控件、可拖动停止按钮和后端性能评测。通过 `JevProvider(apiKey = key, model = "...")` 或 `DeepSeekProvider(apiKey = key, model = "...")` 可以指定模型；可用性和行为由对应服务决定。默认 `jev-latest` 会跟随服务端更新。
 
 ## 参考与许可
 
-动态动作表和单次请求多问题的设计参考了 [browser-use/jev-ultrafast](https://github.com/browser-use/jev-ultrafast)。Android 实现独立编写，本项目不是 Browser Use 或 TypeSafe 官方 SDK。
+动态动作表和单次请求多问题的设计参考了 [browser-use/jev-ultrafast](https://github.com/browser-use/jev-ultrafast)。Android 实现独立编写，本项目不是 Browser Use、TypeSafe 或 DeepSeek 官方 SDK。
 
 - [Jev 官方文档](https://docs.typesafe.ai/introduction)
+- [DeepSeek API 文档](https://api-docs.deepseek.com/api/create-chat-completion/)
 - [Android AccessibilityService](https://developer.android.com/reference/android/accessibilityservice/AccessibilityService)
 - [上游 MIT 许可证](https://github.com/browser-use/jev-ultrafast/blob/main/LICENSE)
 
