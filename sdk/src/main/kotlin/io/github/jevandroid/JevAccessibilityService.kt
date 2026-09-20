@@ -46,6 +46,11 @@ open class JevAccessibilityService : AccessibilityService() {
     }
 
     fun stop() { active?.cancel() }
+    internal fun stopButtonBounds(): ScreenBounds? {
+        val button = stopButton?.takeIf { it.isShown && it.width > 0 && it.height > 0 } ?: return null
+        val location = IntArray(2).also(button::getLocationOnScreen)
+        return ScreenBounds(location[0], location[1], location[0] + button.width, location[1] + button.height)
+    }
     private fun showStopButton() {
         val button = Button(this).apply { text = "Stop Jev"; setOnClickListener { stop() } }
         val params = WindowManager.LayoutParams(

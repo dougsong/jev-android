@@ -1,30 +1,46 @@
 # Validation record
 
-Date: 2026-09-20. This record covers version 0.2.0, including DeepSeek support and the provider picker.
+Date: 2026-09-20. This record covers version 0.3.0, including native long-click, timed long-press, and selectable task scenarios.
 
-## DeepSeek update checks
+## Build and offline checks
 
 | Check | Result |
 |---|---|
-| `:core:test` | 12 passed, 0 failed |
-| `:sdk:testDebugUnitTest` | 39 passed, 0 failed |
-| `:sample:testDebugUnitTest` | 4 passed, 0 failed |
+| `:core:test` | 21 passed, 0 failed |
+| `:sdk:testDebugUnitTest` | 56 passed, 0 failed |
+| `:sample:testDebugUnitTest` | 8 passed, 0 failed |
 | `:sdk:assembleRelease` | Passed; release AAR generated |
 | `:sample:assembleDebug` | Passed; installable debug APK generated |
 | `:sample:assembleDebugAndroidTest` | Passed; instrumented test APK generated |
 | `:sdk:lintDebug` | 0 errors, 6 warnings |
-| `:sample:lintDebug` | 0 errors, 20 warnings |
+| `:sample:lintDebug` | 0 errors, 35 warnings |
 | Core and SDK local Maven publication | Passed; includes POM files, Gradle module metadata, and AAR/JAR artifacts |
 
-All 55 offline tests passed. The SDK suite includes 7 Jev protocol tests, 20 DeepSeek protocol tests, and 12 HTTP/provider tests. DeepSeek checks cover strict JSON shape and types, duplicate keys, trailing content, truncated completions, invalid action/target/text candidates, and allowlist filtering. HTTP tests use a local MockWebServer or fake calls to check request headers and payloads, status handling, redirect/retry behavior, byte limits, cancellation, and sanitized exception chains. No external model API is called by these tests.
+All 85 offline tests passed. The SDK suite includes 13 Jev protocol tests, 26 DeepSeek protocol tests, 12 HTTP/provider tests, and 5 geometry tests. Long-click and long-press checks cover compatible target selection, allowlists, unsupported targets, hold-duration bounds, clipping to observed screen/window bounds, and occluded controls. Provider checks also cover strict JSON, truncation, invalid candidates, request payloads, status handling, redirects/retries, response limits, cancellation, and sanitized errors. No external model API is called by these tests.
 
-The 4 sample tests check that provider switching keeps keys and models separate, restores only the matching draft, respects cleared keys, and starts a new selection without previous credentials. The instrumented test APK compiled, but device tests were not rerun for this update.
+The 8 sample tests check provider-key isolation and the scenario catalog: fixture routing follows the actual host package, Bilibili scenarios replace the demo allowlist and input, custom fields start blank, and presets construct valid tasks.
 
-Lint warnings concern dependency updates, hardcoded UI strings, and sample manifest/resource configuration. Lint errors were not suppressed, and the build is not warning-free. Both local Maven publications use version 0.2.0; the SDK POM includes Gson and its other runtime dependencies.
+Lint warnings concern dependency updates, hardcoded UI strings, and sample manifest/resource configuration. Lint errors were not suppressed, and the build is not warning-free. Both local Maven publications use version 0.3.0.
+
+## Samsung device checks
+
+The final instrumented run passed **5 tests, 0 failures**, on a Samsung SM-F9460 running Android 16 / API 36, connected through wireless ADB. The tests use deterministic providers or direct SDK runtime calls, with no model API key or request:
+
+1. Scenario selection fills the Bilibili goal, package, and `testv` input without starting a task; switching to Custom clears those fields.
+2. Real accessibility text entry and clicking save `Hello Jev`; an independent verifier returns `VERIFIED`.
+3. A two-second `LONG_PRESS` reaches the fixture button. The fixture measures touch-down to touch-up, requires at least 1,800 ms in the test, confirms exactly one completed hold, and rejects a second action using the stale snapshot.
+4. External UI changes invalidate old snapshots; controls outside the allowlist are not exposed.
+5. Native `LONG_CLICK` invokes the long-click listener without producing a timed touch or a normal click.
+
+**Device condition:** Samsung's `com.samsung.android.onetouch` initially intercepted the held touch after about 1.3 seconds and delivered `ACTION_CANCEL` to the correctly targeted button. The successful five-test run temporarily changed the device's secure setting `otch_long_press_enabled_setting` from `1` to `0`, with the owner's explicit permission. It was restored to `1` immediately afterward and read back to verify restoration. The component's original package state (`enabled=0`, meaning Android's default state) was also verified after an earlier temporary-disable attempt. The SDK does not modify either setting.
+
+With the Samsung trigger enabled, a timed hold may still be interrupted. The runtime now checks the foreground after a hold and stops if a system component or another app took over. Callback completion alone does not establish that the app accepted a hold or that the business action succeeded. Bilibili's triple action was not executed during validation.
+
+The test setup rebinds only the demo accessibility service when instrumentation restarts the process, preserves other services, and restores the original accessibility settings. Button matching tolerates Android's uppercase display transformation. After validation, the temporary test APK was removed; demo 0.3.0 remained installed and its accessibility service was rebound.
 
 ## Previous device-test baseline
 
-The initial version passed 2 instrumented tests with 0 failures on `Pixel_3a_API_33_x86_64`, Android 13 / API 33. These results precede the English-language update and DeepSeek support; they do not establish device-test success for version 0.2.0.
+The initial version passed 2 instrumented tests with 0 failures on `Pixel_3a_API_33_x86_64`, Android 13 / API 33. Those older emulator reports precede the language, provider, and long-press updates. The Samsung results above describe the current version.
 
 Device tests temporarily enabled the accessibility service and restored the original settings afterward. The `enabled_accessibility_services` setting was checked and had returned to its original empty value.
 
@@ -43,11 +59,11 @@ Device tests use a **deterministic `DecisionProvider`** and execute real Android
 
 ## Not yet verified
 
-- Version 0.2.0, including the provider picker and updated English fixture, has not been run through instrumented tests on a device or emulator.
-- No model API credentials were used. Live Jev and DeepSeek responses, account/model availability, Chinese-language accuracy, model latency, and billing have not been verified.
+- No model API credentials were used in automated validation. Live Jev and DeepSeek responses, account/model availability, Chinese-language accuracy, model latency, and billing have not been independently verified.
+- Bilibili search and triple-action presets have not been validated end to end. They have no independent outcome verifier; provider-reported completion is `UNVERIFIED`.
 - macOS setup instructions are included, but the project has not been built or run on a Mac in this validation session.
 - Physical Xiaomi testing has not been performed. HyperOS permissions, background behavior, and third-party app task success rates have not been verified.
-- Android version coverage is incomplete. API 26 is the declared minimum; previous device tests covered API 33 only.
+- Android version coverage is incomplete. API 26 is the declared minimum; device tests cover API 36 for this version and API 33 for the earlier baseline.
 - SDK artifacts have not been published to Maven Central or an app store. The source is MIT-licensed; the artifact and group coordinates currently exist only in the local Maven distribution.
 
 ## Local reports
@@ -55,8 +71,9 @@ Device tests use a **deterministic `DecisionProvider`** and execute real Android
 - `core/build/reports/tests/test/index.html`
 - `sdk/build/reports/tests/testDebugUnitTest/index.html`
 - `sample/build/reports/tests/testDebugUnitTest/index.html`
+- `sample/build/reports/samsung-instrumentation-0.3.0.txt` (current five-test device result)
 - `sdk/build/reports/lint-results-debug.html`
 - `sample/build/reports/lint-results-debug.html`
 - `sample/build/reports/androidTests/connected/debug/index.html` (previous device-test baseline)
 
-Some links inside copied HTML reports may refer to the temporary build directory. Machine-readable XML results are in each module's `build/test-results` directory and the sample's `build/outputs/androidTest-results` directory. Any retained device-test reports are from the previous baseline, not a rerun for version 0.2.0.
+Some links inside copied HTML reports may refer to the temporary build directory. Machine-readable unit-test XML results are in each module's `build/test-results` directory. The Samsung run used an explicitly selected wireless ADB device and recorded AndroidJUnitRunner output in the text report above. Retained `androidTests/connected` HTML/XML reports are from the earlier emulator baseline.

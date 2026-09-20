@@ -39,6 +39,78 @@ class JevAgentTest {
         try { JevAgent(runtime, provider(Decision(Operation.CLICK, "999"))).run(task); fail() }
         catch (_: IllegalArgumentException) { assertEquals(0, runtime.mutations) }
     }
+    @Test fun supportedLongClickPassesThroughGateAndExecutesOnce() = runTest {
+        val observed = snapshot.copy(elements = snapshot.elements +
+            Element("3", "Hold", "Button", "", null, setOf(Operation.CLICK, Operation.LONG_CLICK)))
+        val runtime = FakeRuntime(observed)
+        val decision = Decision(Operation.LONG_CLICK, "3")
+        var gated: Decision? = null
+        val result = JevAgent(runtime, provider(decision), gate = ActionGate { _, _, chosen ->
+            gated = chosen; true
+        }).run(task.copy(maxSteps = 1))
+        assertEquals(decision, gated)
+        assertEquals(1, runtime.mutations)
+        assertEquals(Status.LIMIT_REACHED, result.status)
+    }
+    @Test fun clickOnlyNodeCannotBeLongClicked() = runTest {
+        val runtime = FakeRuntime(snapshot)
+        try { JevAgent(runtime, provider(Decision(Operation.LONG_CLICK, "1"))).run(task); fail() }
+        catch (_: IllegalArgumentException) { assertEquals(0, runtime.mutations) }
+    }
+    @Test fun longClickOutsideAllowlistIsRejectedBeforeMutation() = runTest {
+        val observed = snapshot.copy(packageName = "other.app", elements = listOf(
+            Element("3", "Hold", "Button", "", null, setOf(Operation.LONG_CLICK)),
+        ))
+        val runtime = FakeRuntime(observed)
+        try { JevAgent(runtime, provider(Decision(Operation.LONG_CLICK, "3"))).run(task); fail() }
+        catch (_: IllegalArgumentException) { assertEquals(0, runtime.mutations) }
+    }
+    @Test fun longClickCannotCarryText() {
+        val observed = snapshot.copy(elements = listOf(
+            Element("3", "Hold", "Button", "", null, setOf(Operation.LONG_CLICK)),
+        ))
+        try { DecisionRules.validate(task, observed, Decision(Operation.LONG_CLICK, "3", "message")); fail() }
+        catch (_: IllegalArgumentException) { }
+    }
+    @Test fun rejectedLongClickIsNotRetried() = runTest {
+        val observed = snapshot.copy(elements = listOf(
+            Element("3", "Hold", "Button", "", null, setOf(Operation.LONG_CLICK)),
+        ))
+        val runtime = FakeRuntime(observed, false)
+        assertEquals(Status.BLOCKED, JevAgent(runtime, provider(Decision(Operation.LONG_CLICK, "3"))).run(task).status)
+        assertEquals(1, runtime.mutations)
+    }
+    @Test fun supportedTimedLongPressExecutesOnceWithCallerDuration() = runTest {
+        val observed = snapshot.copy(elements = listOf(
+            Element("3", "Hold", "Button", "", null, setOf(Operation.CLICK, Operation.LONG_PRESS)),
+        ))
+        val runtime = FakeRuntime(observed)
+        val result = JevAgent(runtime, provider(Decision(Operation.LONG_PRESS, "3")), gate = ActionGate { supplied, _, _ ->
+            assertEquals(2_500, supplied.longPressDurationMillis); true
+        }).run(task.copy(maxSteps = 1, longPressDurationMillis = 2_500))
+        assertEquals(Status.LIMIT_REACHED, result.status)
+        assertEquals(1, runtime.mutations)
+    }
+    @Test fun timedLongPressMustBeExplicitlyAdvertisedBeforeMutation() = runTest {
+        val runtime = FakeRuntime(snapshot)
+        try { JevAgent(runtime, provider(Decision(Operation.LONG_PRESS, "1"))).run(task); fail() }
+        catch (_: IllegalArgumentException) { assertEquals(0, runtime.mutations) }
+    }
+    @Test fun timedLongPressOutsideAllowlistIsRejectedBeforeMutation() = runTest {
+        val runtime = FakeRuntime(snapshot.copy(packageName = "other.app", elements = listOf(
+            Element("3", "Hold", "Button", "", null, setOf(Operation.LONG_PRESS)),
+        )))
+        try { JevAgent(runtime, provider(Decision(Operation.LONG_PRESS, "3"))).run(task); fail() }
+        catch (_: IllegalArgumentException) { assertEquals(0, runtime.mutations) }
+    }
+    @Test fun longPressDurationIsBounded() {
+        assertEquals(2_000, task.longPressDurationMillis)
+        assertEquals(500, task.copy(longPressDurationMillis = 500).longPressDurationMillis)
+        assertEquals(5_000, task.copy(longPressDurationMillis = 5_000).longPressDurationMillis)
+        for (duration in listOf(-1L, 0L, 499L, 5_001L, Long.MAX_VALUE)) {
+            try { task.copy(longPressDurationMillis = duration); fail() } catch (_: IllegalArgumentException) { }
+        }
+    }
     @Test fun lowConfidenceStopsBeforeMutation() = runTest {
         val runtime = FakeRuntime(snapshot)
         val result = JevAgent(runtime, provider(Decision(Operation.CLICK, "1", confidence = 0.2))).run(task)

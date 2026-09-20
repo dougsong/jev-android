@@ -1,6 +1,6 @@
 package io.github.jevandroid.core
 
-enum class Operation { CLICK, SET_TEXT, SCROLL_FORWARD, SCROLL_BACKWARD, OPEN_APP, BACK, WAIT, DONE, BLOCKED }
+enum class Operation { CLICK, LONG_CLICK, LONG_PRESS, SET_TEXT, SCROLL_FORWARD, SCROLL_BACKWARD, OPEN_APP, BACK, WAIT, DONE, BLOCKED }
 
 data class Element(
     val id: String,
@@ -26,6 +26,8 @@ data class Task(
     val maxSteps: Int = 30,
     val timeoutMillis: Long = 120_000,
     val minimumConfidence: Double = 0.65,
+    /** Duration of a LONG_PRESS gesture on an observed node; models cannot override it. */
+    val longPressDurationMillis: Long = 2_000,
 ) {
     init {
         require(goal.isNotBlank() && goal.length <= 4000)
@@ -34,6 +36,7 @@ data class Task(
         require(maxSteps in 1..200 && timeoutMillis in 1_000..1_800_000)
         require(minimumConfidence.isFinite() && minimumConfidence in 0.0..1.0)
         require(textValues.size <= 50 && textValues.all { it.key.isNotBlank() && it.value.length <= 4000 })
+        require(longPressDurationMillis in 500..5_000)
     }
 }
 
@@ -80,7 +83,7 @@ object DecisionRules {
         require(d.confidence.isFinite() && d.confidence in 0.0..1.0) { "Invalid confidence" }
         when (d.operation) {
             Operation.OPEN_APP -> require(d.target in task.allowedPackages && d.target in snapshot.apps)
-            Operation.CLICK, Operation.SET_TEXT, Operation.SCROLL_FORWARD, Operation.SCROLL_BACKWARD -> {
+            Operation.CLICK, Operation.LONG_CLICK, Operation.LONG_PRESS, Operation.SET_TEXT, Operation.SCROLL_FORWARD, Operation.SCROLL_BACKWARD -> {
                 require(snapshot.packageName in task.allowedPackages) { "Package outside allowlist" }
                 require(snapshot.elements.any { it.id == d.target && d.operation in it.operations }) { "Invalid target" }
                 if (d.operation == Operation.SET_TEXT) require(d.textKey in task.textValues) { "Unknown text key" }

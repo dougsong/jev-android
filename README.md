@@ -9,15 +9,16 @@ The API is still unstable. The project is not published to Maven Central; the de
 ## Features and limitations
 
 - Builds a dynamic action table from accessible controls. Jev selects an operation and its targets through multiple questions in one request; DeepSeek selects an action through JSON output. Both use the same execution loop and guards.
-- Supports clicking, replacing text field contents, scrolling forward or backward, going back, launching allowed apps, waiting, and reporting completion or a blocked task.
+- Supports clicking, long-pressing accessible controls, replacing text field contents, scrolling forward or backward, going back, launching allowed apps, waiting, and reporting completion or a blocked task.
+- `Operation.LONG_CLICK` invokes a control's advertised Android `ACTION_LONG_CLICK` action. `Operation.LONG_PRESS` holds a touch at the center of a currently observed, visible, actionable control. The host controls the hold duration through `Task.longPressDurationMillis` (default 2,000 ms; allowed range 500–5,000 ms); the model cannot supply coordinates or a duration.
 - Neither backend generates arbitrary input text in this SDK. `Task.textValues` supplies named, exact candidate values for the selected model to choose from. Only the selected provider's API key is required.
 - Reads the screen again and compares fingerprints before execution. A stale screen stops the task so old node IDs cannot be reused on a changed interface.
 - Reads back text after input to verify the complete value. Rejected actions stop the task and are not automatically replayed.
 - Includes package allowlists, step and time budgets, a minimum confidence threshold, no-progress detection, and a host-defined action policy.
-- Coroutine cancellation cancels in-flight HTTP requests. An accessibility overlay button stops future actions. Actions already submitted to Android cannot be undone.
+- Coroutine cancellation cancels in-flight HTTP requests. An accessibility overlay button stops future actions. Actions already submitted to Android cannot be undone; a submitted hold may continue until its configured duration expires and the touch is released.
 - `DONE` is only the model's claim of completion. A task returns `VERIFIED` only when an `OutcomeVerifier` is supplied and passes; otherwise, it returns `UNVERIFIED`.
 
-This release does not support screenshot-based vision, guessed coordinates, arbitrary gestures, general WebView or Canvas recognition, password entry, text generation, lock-screen operation, or unattended long-running background tasks. Xiaomi and HyperOS compatibility has not been verified on a physical device. The host defines which settings changes, payments, messages, and other actions are allowed. The default gate permits valid actions inside allowlisted apps; it does not automatically identify every sensitive control.
+This release does not support screenshot-based vision, guessed coordinates, arbitrary gestures beyond the bounded press-and-hold action, general WebView or Canvas recognition, password entry, text generation, lock-screen operation, or unattended long-running background tasks. Xiaomi and HyperOS compatibility has not been verified on a physical device. The host defines which settings changes, payments, messages, and other actions are allowed. The default gate permits valid actions inside allowlisted apps; it does not automatically identify every sensitive control.
 
 ## Modules
 
@@ -25,7 +26,7 @@ This release does not support screenshot-based vision, guessed coordinates, arbi
 |---|---|
 | `core` | Platform-independent task models, decision interfaces, execution loop, verification, and events |
 | `sdk` | Jev and DeepSeek HTTP/JSON integrations, accessibility runtime, service, and stop button |
-| `sample` | Provider and model selection, API configuration, permission settings shortcut, task execution, result logs, and local test screen |
+| `sample` | Provider, model, and scenario selection, editable task presets, API configuration, permission settings shortcut, result logs, and local test screen |
 
 The execution loop reads controls, builds valid choices, asks the selected provider to select an action, applies the host policy, checks that the screen is current, executes the action, and observes the result.
 
@@ -95,7 +96,7 @@ adb install -r sample/build/outputs/apk/debug/sample-debug.apk
 adb shell am start -n io.github.jevandroid.sample/.MainActivity
 ```
 
-The target must appear as `device`, not `unauthorized` or `offline`. When several devices are connected, add `-s YOUR_DEVICE_SERIAL` immediately after `adb` in each install or launch command. In the app, choose **Jev (TypeSafe)** or **DeepSeek**, enter the matching API key, and review the selected provider's data disclosure. Keep the default model or enter a compatible custom model, enable the accessibility service manually, then choose **Run on the built-in test page**. Keep the device unlocked. No key belongs in a shell command or a committed file. After installation, the sample uses its own Internet connection and does not need to stay connected to the Mac.
+The target must appear as `device`, not `unauthorized` or `offline`. When several devices are connected, add `-s YOUR_DEVICE_SERIAL` immediately after `adb` in each install or launch command. In the app, choose **Jev (TypeSafe)** or **DeepSeek**, enter the matching API key, and review the selected provider's data disclosure. Keep the default model or enter a compatible custom model, enable the accessibility service manually, select **Built-in: save text**, then tap **Run selected task**. Keep the device unlocked. No key belongs in a shell command or a committed file. After installation, the sample uses its own Internet connection and does not need to stay connected to the Mac.
 
 Optional instrumented fixture tests on a dedicated emulator or test device:
 
@@ -136,7 +137,7 @@ Adjust the JDK path for your installation. The script preserves the original pro
 
 - `sample/build/outputs/apk/debug/sample-debug.apk`
 - `sdk/build/outputs/aar/sdk-release.aar`
-- `core/build/libs/core-0.2.0.jar`
+- `core/build/libs/core-0.3.0.jar`
 
 **The AAR does not bundle all dependencies.** The SDK also depends on the core module, coroutines, OkHttp, and Gson. Use one of the source-module or Maven integration options below.
 
@@ -168,7 +169,7 @@ maven { url = uri("vendor/jev-maven") }
 Add these dependencies to the host app:
 
 ```kotlin
-implementation("io.github.jevandroid:jev-android:0.2.0")
+implementation("io.github.jevandroid:jev-android:0.3.0")
 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 ```
 
@@ -193,7 +194,7 @@ Add the following inside `<application>` in the app manifest:
 </service>
 ```
 
-Copy the sample's `res/xml/jev_accessibility.xml` and its description string from `strings.xml` into the host app. Explain that visible screen text, the task, and input candidates will be sent to the selected provider (TypeSafe or DeepSeek), then let the user enable the service through `Settings.ACTION_ACCESSIBILITY_SETTINGS`. The service should run in the same process as the host app.
+Copy the sample's `res/xml/jev_accessibility.xml` and its description string from `strings.xml` into the host app. For timed `LONG_PRESS` actions, the XML must include `android:canPerformGestures="true"` and `android:accessibilityFlags="flagReportViewIds|flagRetrieveInteractiveWindows"`. Native `LONG_CLICK` uses the control's accessibility action. Android magnification and touch exploration can affect gesture delivery. Explain that visible screen text, the task, and input candidates will be sent to the selected provider (TypeSafe or DeepSeek), then let the user enable the service through `Settings.ACTION_ACCESSIBILITY_SETTINGS`. The service should run in the same process as the host app.
 
 ### Start a task
 
@@ -253,21 +254,37 @@ val job = service.start(
 
 The main-thread, cancellation, and verification requirements are the same for both providers. This DeepSeek example also demonstrates the API only; live DeepSeek task execution has not yet been validated.
 
-An `OutcomeVerifier` receives a fresh `UiSnapshot` and can check the specific business result. The sample checks the saved value displayed on its test screen. If the verifier returns false, the result is `UNVERIFIED`.
+An `OutcomeVerifier` receives a fresh `UiSnapshot` and can check the specific business result. The sample checks the saved value or long-press result displayed on its test screen. If the verifier returns false, the result is `UNVERIFIED`.
 
 An `ActionGate` can connect to the host's confirmation UI or business rules. Returning false stops the task. If the screen changes while confirmation is pending, the runtime still rejects actions based on the old screen. A provider's confidence alone should not authorize sensitive actions.
 
 Implement `DecisionProvider` to use another model, or implement `DeviceRuntime` to test with a simulated device. When using `JevAgent` directly, the host owns coroutine lifetimes, error handling, stop controls, and exclusive access to the device. `JevAccessibilityService.start` is usually simpler and permits only one active task per service.
 
-## Try it on a Xiaomi phone
+## Try the sample on an Android phone
 
 1. Install the sample debug APK, choose **Jev (TypeSafe)** or **DeepSeek**, and enter that provider's API key. The model field defaults to `jev-latest` or `deepseek-flash`; compatible custom models are allowed. Review the disclosure for the selected provider. DeepSeek mode needs no TypeSafe account.
-2. Enable the accessibility service in system settings. Menus and restrictions vary between HyperOS versions; follow the controls available on your device.
-3. Start with the built-in test screen. Keep the device unlocked. The task should enter `Hello Jev`, click `Save`, and verify that `Saved: Hello Jev` appears.
+2. Enable the accessibility service in system settings. Menus and restrictions vary between Android versions and vendors, including Xiaomi HyperOS and Samsung One UI; follow the controls available on your device.
+3. Select **Built-in: save text**, then tap **Run selected task**. Keep the device unlocked. The task should enter `Hello Jev`, click `Save`, and verify that `Saved: Hello Jev` appears. Use **Built-in: long press** to try a timed press-and-hold on the test control.
 4. Use `Stop Jev` in the upper-right corner to stop execution. Return to the sample's main screen to inspect the result. Only `VERIFIED` indicates that the local outcome check passed.
-5. Then configure another target package, goal, and text candidates. The overlay button can cover controls near the top of the screen; avoid controls under it in this release.
+5. Choose another scenario or **Custom task**, review its goal, allowed packages, and input candidates, then tap **Run selected task**. The overlay button can cover controls near the top of the screen; avoid controls under it in this release.
 
 Automation uses the current foreground interface. You cannot simultaneously use other apps manually. System permissions, sign-in, and inaccessible controls require manual handling.
+
+On a Samsung SM-F9460 running Android 16, the system component `com.samsung.android.onetouch` intercepted two-second holds during local fixture testing. The tests passed with its long-press option temporarily disabled, and that setting was restored afterward; see [VALIDATION.md](VALIDATION.md). If a hold opens a system feature instead of the target control, review that feature's settings and disable its long-press trigger or exclude the target app if an exclusion is available. The SDK does not change these system settings. It stops when a hold moves the foreground outside the original app.
+
+### Available scenarios
+
+Selecting a scenario fills the task, package allowlist, and input candidates; these fields remain editable. Selection does not start automation. **Run selected task** opens the local test screen for built-in scenarios or starts the selected external-app task. Provider selection and API keys are independent of the scenario.
+
+| Scenario | Target | Behavior |
+|---|---|---|
+| **Built-in: save text** | Sample app | Enter `Hello Jev`, save it, and check the displayed result. |
+| **Built-in: long press** | Sample app | Hold the test control and check its visible result. |
+| **Bilibili: search testv** | `tv.danmaku.bili` | Search for `testv`, skip ads and live streams, and open the first ordinary video. |
+| **Bilibili: search + triple action** | `tv.danmaku.bili` | Search for `testv`, open the first ordinary video, then hold Like once for two seconds to attempt the combined like, coin, and favorite action. |
+| **Custom task** | User configuration | Start with blank fields and supply a goal, allowed packages, and exact input candidates. |
+
+The Bilibili presets target the mainland Android app and are example task instructions, not verified app integrations. The triple-action preset can affect the signed-in account and spend Bilibili coins. It requests `LONG_PRESS` once and tells the model to stop if login, a CAPTCHA, insufficient coins, an unavailable target, or no visible success prevents completion; it does not request repeated holds or separate like/coin/favorite actions as a fallback. The timed hold uses the observed control's center, so the target must be exposed and correctly identified; this SDK cannot guarantee Bilibili's combined action. External-app presets have no built-in outcome verifier: a model completion claim returns `UNVERIFIED`.
 
 ## Data handling and error behavior
 
@@ -282,9 +299,9 @@ Automation uses the current foreground interface. You cannot simultaneously use 
 
 ## Tests and future work
 
-Offline tests cover cancellation, timeouts, step limits, allowlists, invalid targets, input-value restrictions, outcome verification, low confidence, stopping without retry after action failure, and Jev response distribution and branch validation. DeepSeek tests cover malformed or truncated responses, invalid action choices, HTTP status handling, response-size limits, and transport cancellation. Sample tests check provider-key isolation when switching backends. Provider responses and HTTP behavior are tested with offline fixtures and mocks, not live API calls. Android builds and lint do not establish real-device task success. See `VALIDATION.md` for the current validation status.
+Offline tests cover cancellation, timeouts, step limits, allowlists, invalid targets, input-value restrictions, outcome verification, low confidence, stopping without retry after action failure, and Jev response distribution and branch validation. DeepSeek tests cover malformed or truncated responses, invalid action choices, HTTP status handling, response-size limits, and transport cancellation. Long-press tests check action eligibility and provider decisions; sample tests cover scenario configuration and provider-key isolation when switching backends. Provider responses and HTTP behavior are tested with offline fixtures and mocks, not live API calls. Android builds and lint do not establish real-device task success. See [VALIDATION.md](VALIDATION.md) for the current validation status.
 
-The `:sample:connectedDebugAndroidTest` task uses a deterministic decision provider on a connected emulator or test device. It checks real accessibility reads, text entry, clicking, result verification, stale-screen rejection, and allowlist enforcement. Tests temporarily enable the service and restore the previous accessibility settings afterward. Run them only on a dedicated test device. They do not call Jev or DeepSeek or establish real-model success rates. Neither provider has been validated with live API calls in this project yet.
+The `:sample:connectedDebugAndroidTest` task uses a deterministic decision provider on a connected emulator or test device. It checks real accessibility reads, text entry, clicking, long-pressing, result verification, stale-screen rejection, and allowlist enforcement. Tests temporarily enable the service and restore the previous accessibility settings afterward. Run them only on a dedicated test device. They do not call Jev or DeepSeek or establish real-model success rates. Neither provider has been validated with live API calls in this project yet.
 
 Initial validation priorities include live model calls, Chinese-language target interfaces, and physical Xiaomi devices. Future work may add screenshot assistance, optional text generation, more input controls, a draggable stop button, and provider performance benchmarks. Set a model explicitly with `JevProvider(apiKey = key, model = "...")` or `DeepSeekProvider(apiKey = key, model = "...")`; availability and behavior depend on the provider. The default `jev-latest` follows server-side updates.
 

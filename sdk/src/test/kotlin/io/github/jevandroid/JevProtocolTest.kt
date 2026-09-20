@@ -10,6 +10,8 @@ class JevProtocolTest {
     private val snapshot = UiSnapshot("v1", "test.app", listOf(
         Element("7", "Message", "EditText", "", null, setOf(Operation.SET_TEXT)),
         Element("8", "Save", "Button", "", null, setOf(Operation.CLICK)),
+        Element("9", "Hold", "Button", "", null, setOf(Operation.LONG_CLICK)),
+        Element("10", "Sustained hold", "Button", "", null, setOf(Operation.LONG_PRESS)),
     ))
     private fun request() = JevProtocol.request(task, snapshot, emptyList(), "jev-latest")
     private fun response(request: JSONObject, op: String): JSONObject {
@@ -27,7 +29,48 @@ class JevProtocolTest {
         val q = request().getJSONObject("questions")
         assertEquals(setOf("7"), q.getJSONObject("set_text_target").getJSONObject("criteria").keys().asSequence().toSet())
         assertEquals(setOf("8"), q.getJSONObject("click_target").getJSONObject("criteria").keys().asSequence().toSet())
+        assertEquals(setOf("9"), q.getJSONObject("long_click_target").getJSONObject("criteria").keys().asSequence().toSet())
+        assertEquals(setOf("10"), q.getJSONObject("long_press_target").getJSONObject("criteria").keys().asSequence().toSet())
         assertTrue(q.has("text_value"))
+    }
+    @Test fun parsesLongClickOnlyForAdvertisedTarget() {
+        val request = request()
+        val response = response(request, "LONG_CLICK")
+        response.getJSONObject("answers").getJSONObject("long_click_target").put("confidence", 0.7)
+        assertEquals(Decision(Operation.LONG_CLICK, "9", null, 0.7), JevProtocol.parse(response, request))
+    }
+    @Test fun longClickCannotChooseClickOnlyTarget() {
+        val request = request()
+        val response = response(request, "LONG_CLICK")
+        response.getJSONObject("answers").getJSONObject("long_click_target").put("choice", "8")
+        try { JevProtocol.parse(response, request); fail() } catch (_: IllegalArgumentException) { }
+    }
+    @Test fun longClickWithoutSupportedNodesIsNeitherOfferedNorAccepted() {
+        val request = JevProtocol.request(task, snapshot.copy(elements = snapshot.elements.filter { it.id != "9" }),
+            emptyList(), "jev-latest")
+        val questions = request.getJSONObject("questions")
+        assertFalse(questions.has("long_click_target"))
+        assertFalse(questions.getJSONObject("operation").getJSONObject("criteria").has("LONG_CLICK"))
+        try { JevProtocol.parse(response(request, "LONG_CLICK"), request); fail() } catch (_: IllegalArgumentException) { }
+    }
+    @Test fun parsesTimedLongPressAndExposesCallerDuration() {
+        val request = JevProtocol.request(task.copy(longPressDurationMillis = 2_500), snapshot, emptyList(), "jev-latest")
+        assertEquals(2_500L, request.getJSONObject("state").getLong("long_press_duration_millis"))
+        assertEquals(Decision(Operation.LONG_PRESS, "10", null, 0.9), JevProtocol.parse(response(request, "LONG_PRESS"), request))
+    }
+    @Test fun timedLongPressCannotChooseUnadvertisedClickTarget() {
+        val request = request()
+        val response = response(request, "LONG_PRESS")
+        response.getJSONObject("answers").getJSONObject("long_press_target").put("choice", "8")
+        try { JevProtocol.parse(response, request); fail() } catch (_: IllegalArgumentException) { }
+    }
+    @Test fun timedLongPressWithoutSupportedNodesIsNeitherOfferedNorAccepted() {
+        val request = JevProtocol.request(task, snapshot.copy(elements = snapshot.elements.filter { it.id != "10" }),
+            emptyList(), "jev-latest")
+        val questions = request.getJSONObject("questions")
+        assertFalse(questions.has("long_press_target"))
+        assertFalse(questions.getJSONObject("operation").getJSONObject("criteria").has("LONG_PRESS"))
+        try { JevProtocol.parse(response(request, "LONG_PRESS"), request); fail() } catch (_: IllegalArgumentException) { }
     }
     @Test fun selectedTargetConfidenceIsRespected() {
         val request = request()
@@ -67,6 +110,8 @@ class JevProtocolTest {
         assertEquals(10, request.getJSONObject("state").getJSONArray("recent_actions").length())
         val questions = request.getJSONObject("questions")
         assertFalse(questions.has("click_target"))
+        assertFalse(questions.has("long_click_target"))
+        assertFalse(questions.has("long_press_target"))
         assertEquals(setOf("test.app"), questions.getJSONObject("open_app_target").getJSONObject("criteria").keySet())
     }
 }

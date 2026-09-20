@@ -12,6 +12,8 @@ class DeepSeekProtocolTest {
         Element("7", "Message", "EditText", "", null, setOf(Operation.SET_TEXT)),
         Element("8", "Save", "Button", "", null, setOf(Operation.CLICK)),
         Element("9", "List", "ListView", "", null, setOf(Operation.SCROLL_FORWARD, Operation.SCROLL_BACKWARD)),
+        Element("10", "Hold", "Button", "", null, setOf(Operation.LONG_CLICK)),
+        Element("11", "Sustained hold", "Button", "", null, setOf(Operation.LONG_PRESS)),
     ), mapOf("test.app" to "Test", "other.app" to "Not allowed"))
 
     private fun content(operation: String = "SET_TEXT", target: Any = "7", textKey: Any = "greeting") = JSONObject()
@@ -47,6 +49,8 @@ class DeepSeekProtocolTest {
         val state = JSONObject(messages.getJSONObject(1).getString("content"))
         val candidates = state.getJSONObject("action_choices")
         assertEquals(listOf("8"), candidates.getJSONArray("CLICK").toList())
+        assertEquals(listOf("10"), candidates.getJSONArray("LONG_CLICK").toList())
+        assertEquals(listOf("11"), candidates.getJSONArray("LONG_PRESS").toList())
         assertEquals(listOf("7"), candidates.getJSONArray("SET_TEXT").toList())
         assertEquals(listOf("test.app"), candidates.getJSONArray("OPEN_APP").toList())
         assertFalse(state.getJSONObject("apps").has("other.app"))
@@ -81,13 +85,55 @@ class DeepSeekProtocolTest {
     }
 
     @Test fun parsesEverySupportedNonTextAction() {
-        listOf(Operation.CLICK to "8", Operation.SCROLL_FORWARD to "9", Operation.SCROLL_BACKWARD to "9",
+        listOf(Operation.CLICK to "8", Operation.LONG_CLICK to "10", Operation.LONG_PRESS to "11",
+            Operation.SCROLL_FORWARD to "9", Operation.SCROLL_BACKWARD to "9",
             Operation.OPEN_APP to "test.app").forEach { (op, target) ->
             assertEquals(Decision(op, target, null, 0.9), parse(content(op.name, target, JSONObject.NULL)))
         }
         listOf(Operation.BACK, Operation.WAIT, Operation.DONE, Operation.BLOCKED).forEach { op ->
             assertEquals(Decision(op, null, null, 0.9), parse(content(op.name, JSONObject.NULL, JSONObject.NULL)))
         }
+    }
+
+    @Test fun longClickCannotChooseClickOnlyTarget() {
+        rejected(envelope(content("LONG_CLICK", "8", JSONObject.NULL).toString()).toString())
+    }
+
+    @Test fun longClickWithoutSupportedNodesIsNeitherOfferedNorAccepted() {
+        val observed = snapshot.copy(elements = snapshot.elements.filter { it.id != "10" })
+        val request = DeepSeekProtocol.request(task, observed, emptyList(), "deepseek-flash")
+        val state = JSONObject(request.getJSONArray("messages").getJSONObject(1).getString("content"))
+        assertFalse(state.getJSONObject("action_choices").has("LONG_CLICK"))
+        rejected(envelope(content("LONG_CLICK", "8", JSONObject.NULL).toString()).toString(), usedSnapshot = observed)
+    }
+
+    @Test fun longClickOutsideAllowlistOrWithTextIsRejected() {
+        rejected(envelope(content("LONG_CLICK", "10", JSONObject.NULL).toString()).toString(),
+            usedSnapshot = snapshot.copy(packageName = "other.app"))
+        rejected(envelope(content("LONG_CLICK", "10", "greeting").toString()).toString())
+    }
+
+    @Test fun timedLongPressUsesCallerDurationAndCannotSupplyItsOwn() {
+        val request = DeepSeekProtocol.request(task.copy(longPressDurationMillis = 2_500), snapshot, emptyList(), "deepseek-flash")
+        val state = JSONObject(request.getJSONArray("messages").getJSONObject(1).getString("content"))
+        assertEquals(2_500L, state.getLong("long_press_duration_millis"))
+        rejected(envelope(content("LONG_PRESS", "11", JSONObject.NULL).put("duration_millis", 9_999).toString()).toString())
+    }
+
+    @Test fun timedLongPressRequiresExplicitCompatibleCandidate() {
+        rejected(envelope(content("LONG_PRESS", "8", JSONObject.NULL).toString()).toString())
+        rejected(envelope(content("LONG_PRESS", "10", JSONObject.NULL).toString()).toString())
+        val observed = snapshot.copy(elements = snapshot.elements.filter { it.id != "11" })
+        val request = DeepSeekProtocol.request(task, observed, emptyList(), "deepseek-flash")
+        val state = JSONObject(request.getJSONArray("messages").getJSONObject(1).getString("content"))
+        assertFalse(state.getJSONObject("action_choices").has("LONG_PRESS"))
+        rejected(envelope(content("LONG_PRESS", "11", JSONObject.NULL).toString()).toString(), usedSnapshot = observed)
+    }
+
+    @Test fun timedLongPressOutsideAllowlistOrWithTextIsRejected() {
+        rejected(envelope(content("LONG_PRESS", "11", JSONObject.NULL).toString()).toString(),
+            usedSnapshot = snapshot.copy(packageName = "other.app"))
+        rejected(envelope(content("LONG_PRESS", "11", "greeting").toString()).toString())
     }
 
     @Test fun incompatibleAndUnknownCandidatesAreRejected() {

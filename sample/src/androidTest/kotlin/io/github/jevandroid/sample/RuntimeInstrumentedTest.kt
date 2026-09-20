@@ -2,10 +2,14 @@ package io.github.jevandroid.sample
 
 import android.app.UiAutomation
 import android.content.ComponentName
+import android.content.Intent
 import android.provider.Settings
 import android.view.View
 import android.view.ViewGroup
+import android.view.MotionEvent
+import android.view.Window
 import android.widget.EditText
+import android.widget.Spinner
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -16,9 +20,26 @@ import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
 
-/** Emulator/device fixture tests. No TypeSafe key or network/model call. */
+/** Emulator/device fixture tests. No API key or network/model call. */
 @RunWith(AndroidJUnit4::class)
 class RuntimeInstrumentedTest {
+    private fun views(root: View): List<View> = listOf(root) +
+        if (root is ViewGroup) (0 until root.childCount).flatMap { views(root.getChildAt(it)) } else emptyList()
+
+    private suspend fun awaitFixture(runtime: AccessibilityRuntime, task: Task, text: String): UiSnapshot {
+        var last: UiSnapshot? = null
+        return withTimeoutOrNull(5_000) {
+            while (true) {
+                val snapshot = runtime.observe(task)
+                last = snapshot
+                if (snapshot.packageName in task.allowedPackages && snapshot.elements.any { it.value.equals(text, ignoreCase = true) })
+                    return@withTimeoutOrNull snapshot
+                delay(100)
+            }
+            @Suppress("UNREACHABLE_CODE") error("Unreachable")
+        } ?: throw AssertionError("Fixture '$text' not visible; package=${last?.packageName}, elements=${last?.elements?.size}. Keep the device unlocked and the fixture foreground.")
+    }
+
     private fun <T> withService(block: (JevAccessibilityService) -> T): T {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
@@ -30,6 +51,16 @@ class RuntimeInstrumentedTest {
         try {
             val component = ComponentName(context, JevAccessibilityService::class.java).flattenToString()
             val services = oldServices.orEmpty().split(':').filter { it.isNotBlank() }.toMutableSet().apply { add(component) }
+            // Instrumentation restarts the target process. Some devices retain the old
+            // binding as crashed until this service is removed and added again.
+            Settings.Secure.putString(resolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
+                services.filter { it != component }.joinToString(":"))
+            runBlocking {
+                withTimeout(5_000) {
+                    while (JevAccessibilityService.connected.value != null) delay(100)
+                }
+                delay(300)
+            }
             Settings.Secure.putString(resolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, services.joinToString(":"))
             Settings.Secure.putInt(resolver, Settings.Secure.ACCESSIBILITY_ENABLED, 1)
             val service = runBlocking {
@@ -49,14 +80,14 @@ class RuntimeInstrumentedTest {
 
     @Test fun observesInputsClicksAndVerifiesRealFixture() = withService { service ->
         ActivityScenario.launch(FixtureActivity::class.java).use {
-            runBlocking { delay(800) }
+            runBlocking { awaitFixture(AccessibilityRuntime(service), Task("Wait for fixture", setOf("io.github.jevandroid.sample")), "Save") }
             val result = CompletableDeferred<RunResult>()
             val provider = object : DecisionProvider {
                 override suspend fun decide(task: Task, snapshot: UiSnapshot, history: List<StepRecord>): Decision {
                     if (snapshot.elements.any { it.value == "Saved: Hello Jev" }) return Decision(Operation.DONE)
                     val input = snapshot.elements.first { Operation.SET_TEXT in it.operations }
                     return if (input.value != "Hello Jev") Decision(Operation.SET_TEXT, input.id, "message")
-                    else Decision(Operation.CLICK, snapshot.elements.first { it.value == "Save" && Operation.CLICK in it.operations }.id)
+                    else Decision(Operation.CLICK, snapshot.elements.first { it.value.equals("Save", ignoreCase = true) && Operation.CLICK in it.operations }.id)
                 }
             }
             InstrumentationRegistry.getInstrumentation().runOnMainSync {
@@ -74,11 +105,10 @@ class RuntimeInstrumentedTest {
     @Test fun changedUiIsRejectedAndOutsidePackageIsNotRead() = withService { service ->
         ActivityScenario.launch(FixtureActivity::class.java).use { scenario ->
             runBlocking {
-                delay(800)
                 val runtime = AccessibilityRuntime(service)
                 val task = Task("Save", setOf("io.github.jevandroid.sample"))
-                val snapshot = runtime.observe(task)
-                val save = snapshot.elements.first { it.value == "Save" && Operation.CLICK in it.operations }
+                val snapshot = awaitFixture(runtime, task, "Save")
+                val save = snapshot.elements.first { it.value.equals("Save", ignoreCase = true) && Operation.CLICK in it.operations }
                 fun findInput(view: View): EditText? {
                     if (view is EditText) return view
                     if (view is ViewGroup) for (i in 0 until view.childCount) findInput(view.getChildAt(i))?.let { return it }
@@ -89,6 +119,105 @@ class RuntimeInstrumentedTest {
                 assertFalse(runtime.execute(task, snapshot, Decision(Operation.CLICK, save.id)))
                 val outside = runtime.observe(Task("Other", setOf("not.allowed")))
                 assertTrue(outside.elements.isEmpty())
+            }
+        }
+    }
+
+    @Test(timeout = 30_000) fun performsTimedLongPressWithMeasuredTouchDuration() = withService { service ->
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val intent = Intent(context, FixtureActivity::class.java)
+            .putExtra(FixtureActivity.EXTRA_KIND, FixtureKind.LONG_PRESS.name)
+        ActivityScenario.launch<FixtureActivity>(intent).use { scenario ->
+            val touches = java.util.concurrent.CopyOnWriteArrayList<String>()
+            var buttonBounds = ""
+            scenario.onActivity { activity ->
+                val button = views(activity.findViewById(android.R.id.content)).filterIsInstance<android.widget.Button>()
+                    .first { it.text.toString() == "Hold to confirm" }
+                val location = IntArray(2).also(button::getLocationOnScreen)
+                buttonBounds = "${location.toList()}, ${button.width}x${button.height}"
+                val original = activity.window.callback
+                activity.window.callback = object : Window.Callback by original {
+                    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+                        if (event.actionMasked != MotionEvent.ACTION_MOVE)
+                            touches += "${event.actionMasked}: ${event.rawX},${event.rawY}; elapsed=${event.eventTime - event.downTime}"
+                        return original.dispatchTouchEvent(event)
+                    }
+                }
+            }
+            runBlocking {
+                val runtime = AccessibilityRuntime(service)
+                val task = Task("Hold the fixture control", setOf(context.packageName))
+                // An observed node can appear before the newly launched input window is ready.
+                awaitFixture(runtime, task, "Hold to confirm")
+                delay(800)
+                val before = awaitFixture(runtime, task, "Hold to confirm")
+                val hold = before.elements.first { it.value.equals("Hold to confirm", ignoreCase = true) }
+                assertTrue("Timed hold must be advertised", Operation.LONG_PRESS in hold.operations)
+                assertFalse("The touch-only fixture must not advertise native long-click", Operation.LONG_CLICK in hold.operations)
+                try {
+                    runtime.execute(task, before, Decision(Operation.LONG_CLICK, hold.id))
+                    fail("Native long-click on a click-only control must be rejected")
+                } catch (_: IllegalArgumentException) { }
+                val accepted = runtime.execute(task, before, Decision(Operation.LONG_PRESS, hold.id))
+                delay(200)
+                val afterHold = runtime.observe(task)
+                assertTrue("Hold rejected; foreground=${afterHold.packageName}, touches=$touches", accepted)
+                assertTrue("Fixture result after hold: package=${afterHold.packageName}, values=${afterHold.elements.map { it.value }}, bounds=$buttonBounds, touches=$touches",
+                    afterHold.elements.any { it.value == "Long press confirmed" })
+                val stats = afterHold.elements.first { it.value.startsWith("Completed holds: 1;") }.value
+                val elapsed = stats.substringAfter("duration: ").substringBefore(" ms").toLong()
+                assertTrue("Hold ended too early: $elapsed ms", elapsed >= 1_800)
+                assertFalse(afterHold.elements.any { it.value == "A tap is not a long press" })
+                // The outcome changed the screen, so the old snapshot cannot dispatch another hold.
+                assertFalse(runtime.execute(task, before, Decision(Operation.LONG_PRESS, hold.id)))
+            }
+        }
+    }
+
+    @Test fun performsNativeLongClickWithoutSynthesizingATouch() = withService { service ->
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val intent = Intent(context, FixtureActivity::class.java)
+            .putExtra(FixtureActivity.EXTRA_KIND, FixtureKind.LONG_PRESS.name)
+        ActivityScenario.launch<FixtureActivity>(intent).use {
+            runBlocking {
+                val runtime = AccessibilityRuntime(service)
+                val task = Task("Use native long-click", setOf(context.packageName))
+                val before = awaitFixture(runtime, task, "Native long click")
+                val native = before.elements.first { it.value.equals("Native long click", ignoreCase = true) }
+                assertTrue(Operation.LONG_CLICK in native.operations)
+                assertTrue(runtime.execute(task, before, Decision(Operation.LONG_CLICK, native.id)))
+                val after = awaitFixture(runtime, task, "Native long click confirmed")
+                assertTrue(after.elements.any { it.value == "Completed holds: 0; duration: 0 ms" })
+                assertFalse(after.elements.any { it.value == "A tap is not a long press" })
+                assertFalse(runtime.execute(task, before, Decision(Operation.LONG_CLICK, native.id)))
+            }
+        }
+    }
+
+    @Test fun selectingScenariosFillsFieldsWithoutRunningATask() {
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            scenario.onActivity { activity ->
+                val all = views(activity.findViewById(android.R.id.content))
+                val picker = all.filterIsInstance<Spinner>().single { it.contentDescription == "Scenario selector" }
+                picker.setSelection(TaskScenarios.create(activity.packageName).indexOfFirst { it.id == "bilibili_triple" })
+            }
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+            scenario.onActivity { activity ->
+                val all = views(activity.findViewById(android.R.id.content))
+                val fields = all.filterIsInstance<EditText>().associateBy { it.hint.toString() }
+                assertEquals("tv.danmaku.bili", fields.getValue("Allowed package names, separated by commas").text.toString())
+                assertEquals("testv", fields.getValue("Input candidates for the model, one value per line").text.toString())
+                assertTrue(fields.getValue("Task").text.toString().contains("press and hold the Like button once"))
+                assertTrue(all.filterIsInstance<android.widget.TextView>().any { it.text.toString() == "Ready" })
+                all.filterIsInstance<Spinner>().single { it.contentDescription == "Scenario selector" }
+                    .setSelection(TaskScenarios.create(activity.packageName).indexOfFirst { it.id == "custom" })
+            }
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+            scenario.onActivity { activity ->
+                val fields = views(activity.findViewById(android.R.id.content)).filterIsInstance<EditText>().associateBy { it.hint.toString() }
+                assertEquals("", fields.getValue("Task").text.toString())
+                assertEquals("", fields.getValue("Allowed package names, separated by commas").text.toString())
+                assertEquals("", fields.getValue("Input candidates for the model, one value per line").text.toString())
             }
         }
     }
