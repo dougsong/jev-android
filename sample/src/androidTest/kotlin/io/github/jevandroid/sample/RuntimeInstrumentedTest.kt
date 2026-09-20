@@ -84,6 +84,9 @@ class RuntimeInstrumentedTest {
             val result = CompletableDeferred<RunResult>()
             val provider = object : DecisionProvider {
                 override suspend fun decide(task: Task, snapshot: UiSnapshot, history: List<StepRecord>): Decision {
+                    // A real provider suspends for network I/O; allow overlay layout/events
+                    // to occur between observation and execution as they do with DeepSeek.
+                    delay(400)
                     if (snapshot.elements.any { it.value == "Saved: Hello Jev" }) return Decision(Operation.DONE)
                     val input = snapshot.elements.first { Operation.SET_TEXT in it.operations }
                     return if (input.value != "Hello Jev") Decision(Operation.SET_TEXT, input.id, "message")
@@ -97,7 +100,7 @@ class RuntimeInstrumentedTest {
                     onError = { error -> result.completeExceptionally(error) })
             }
             val completed = runBlocking { withTimeout(15_000) { result.await() } }
-            assertEquals(Status.VERIFIED, completed.status)
+            assertEquals(completed.message, Status.VERIFIED, completed.status)
             assertEquals(2, completed.steps)
         }
     }

@@ -38,6 +38,7 @@ open class JevAccessibilityService : AccessibilityService() {
         return scope.launch(start = CoroutineStart.LAZY) {
             try {
                 showStopButton()
+                awaitStopButtonLayout()
                 JevAgent(AccessibilityRuntime(this@JevAccessibilityService), provider, verifier, gate).run(task, onEvent)
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { onError(e) }
@@ -61,6 +62,15 @@ open class JevAccessibilityService : AccessibilityService() {
         ).apply { gravity = Gravity.TOP or Gravity.END; y = 80 }
         getSystemService(WindowManager::class.java).addView(button, params)
         stopButton = button
+    }
+    private suspend fun awaitStopButtonLayout() {
+        // addView schedules layout. Observe only after the visible Stop control has bounds,
+        // including when a real provider suspends long enough for the first frame to run.
+        val ready = withTimeoutOrNull(1_500) {
+            while (stopButtonBounds() == null) delay(16)
+            true
+        } ?: false
+        check(ready) { "Stop control did not become ready" }
     }
     private fun removeStopButton() {
         stopButton?.let { runCatching { getSystemService(WindowManager::class.java).removeView(it) } }

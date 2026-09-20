@@ -21,7 +21,6 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import java.security.MessageDigest
 import kotlin.coroutines.resume
 
 /** Native node actions and explicit holds on observed node bounds; no model-supplied coordinates. */
@@ -49,7 +48,7 @@ class AccessibilityRuntime(private val service: AccessibilityService) : DeviceRu
         DecisionRules.validate(task, snapshot, decision)
         val fresh = capture(task)
         try {
-            if (snapshot.fingerprint != fresh.snapshot.fingerprint) return@withContext false
+            if (!SnapshotFingerprints.matches(snapshot, fresh.snapshot, decision.operation)) return@withContext false
             currentCoroutineContext().ensureActive()
             when (decision.operation) {
                 Operation.OPEN_APP -> {
@@ -193,7 +192,8 @@ class AccessibilityRuntime(private val service: AccessibilityService) : DeviceRu
                     elements += element
                     nodes[path] = AccessibilityNodeInfo.obtain(node)
                     if (holdTarget != null) longPressTargets[path] = holdTarget
-                    signatures += "$element|${node.viewIdResourceName}|$bounds|${node.isEnabled}|${node.isFocused}|${node.isSelected}"
+                    signatures += SnapshotFingerprints.node(element, node.viewIdResourceName, bounds.screenBounds(),
+                        node.isEnabled, node.isFocused, node.isSelected)
                 }
                 for (i in 0 until node.childCount) node.getChild(i)?.let { visit(it, "$path.$i", depth + 1) }
             } finally { node.recycle() }
@@ -203,10 +203,11 @@ class AccessibilityRuntime(private val service: AccessibilityService) : DeviceRu
             if (root != null) {
                 if (packageName in task.allowedPackages) visit(root, "0", 0) else root.recycle()
             }
-            val canonical = "$packageName|$windowId|${signatures.joinToString("\n")}|$apps|$gestureContext|$longPressTargets"
-            val digest = MessageDigest.getInstance("SHA-256").digest(canonical.toByteArray())
-                .joinToString("") { "%02x".format(it) }
-            return Capture(UiSnapshot(digest, packageName, elements, apps), nodes, longPressTargets)
+            val fingerprint = SnapshotFingerprints.ui(packageName, windowId, signatures, apps)
+            val gestureFingerprint = gestureContext?.let { context ->
+                SnapshotFingerprints.gestures(context.window, context.display, context.occlusions, longPressTargets)
+            }
+            return Capture(UiSnapshot(fingerprint, packageName, elements, apps, gestureFingerprint), nodes, longPressTargets)
         } catch (e: Exception) {
             nodes.values.forEach { it.recycle() }
             throw e

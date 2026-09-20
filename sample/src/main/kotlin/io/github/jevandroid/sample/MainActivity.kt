@@ -32,7 +32,7 @@ class MainActivity : Activity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         val column = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(32, 32, 32, 32) }
         setContentView(ScrollView(this).apply { addView(column) })
-        column.addView(TextView(this).apply { text = "Jev Android SDK · 0.3.0"; textSize = 25f })
+        column.addView(TextView(this).apply { text = "Jev Android SDK · 0.3.1"; textSize = 25f })
         status = TextView(this).apply { text = "Ready"; textSize = 16f }
         column.addView(status)
         column.addView(TextView(this).apply { text = "Decision provider" })

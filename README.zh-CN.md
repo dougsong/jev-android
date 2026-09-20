@@ -13,6 +13,7 @@ API 尚未稳定。项目未发布到 Maven Central；下文的依赖坐标仅�
 - `Operation.LONG_CLICK` 调用控件声明支持的 Android `ACTION_LONG_CLICK` 动作；`Operation.LONG_PRESS` 在当前读取到的可见、可操作控件中心按住触屏。按住时长由宿主通过 `Task.longPressDurationMillis` 指定（默认 2,000 毫秒，允许范围为 500–5,000 毫秒），模型不能提供坐标或时长。
 - 本 SDK 的两个后端均不生成任意输入文字。调用方通过 `Task.textValues` 提供命名的准确候选值，由选中的模型选择；只需要当前后端的 API Key。
 - 执行前重新读取屏幕并比较指纹。页面过期时停止任务，避免把旧节点编号用于变化后的界面。
+- 首次观察前等待停止按钮完成布局。手势几何信息单独校验，避免模型请求期间的浮层布局变化导致原生节点操作被误判为过期。
 - 输入后读取控件并验证完整值。操作被拒绝时停止，不自动重复执行。
 - 提供包名白名单、步骤和时间限制、最低置信度、无进展检测及宿主自定义操作策略。
 - 取消协程会取消正在进行的 HTTP 请求；无障碍悬浮按钮可停止后续操作。已经提交给 Android 的操作无法撤销；已经提交的按住手势可能持续到设定时长结束后才释放触屏。
@@ -137,7 +138,7 @@ Linux 使用 `./gradlew`。项目设置了 `android.overridePathCheck=true`，�
 
 - `sample/build/outputs/apk/debug/sample-debug.apk`
 - `sdk/build/outputs/aar/sdk-release.aar`
-- `core/build/libs/core-0.3.0.jar`
+- `core/build/libs/core-0.3.1.jar`
 
 **AAR 不包含全部依赖。** SDK 还依赖 core 模块、协程、OkHttp 和 Gson，建议按下面的源码模块或 Maven 方式接入。
 
@@ -169,7 +170,7 @@ maven { url = uri("vendor/jev-maven") }
 宿主 app 添加依赖：
 
 ```kotlin
-implementation("io.github.jevandroid:jev-android:0.3.0")
+implementation("io.github.jevandroid:jev-android:0.3.1")
 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 ```
 

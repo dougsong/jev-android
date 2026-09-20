@@ -16,6 +16,8 @@ data class UiSnapshot(
     val packageName: String,
     val elements: List<Element>,
     val apps: Map<String, String> = emptyMap(),
+    /** Optional geometry/occlusion identity, checked separately before a timed touch gesture. */
+    val gestureFingerprint: String? = null,
 )
 
 data class Task(

@@ -13,6 +13,7 @@ The API is still unstable. The project is not published to Maven Central; the de
 - `Operation.LONG_CLICK` invokes a control's advertised Android `ACTION_LONG_CLICK` action. `Operation.LONG_PRESS` holds a touch at the center of a currently observed, visible, actionable control. The host controls the hold duration through `Task.longPressDurationMillis` (default 2,000 ms; allowed range 500–5,000 ms); the model cannot supply coordinates or a duration.
 - Neither backend generates arbitrary input text in this SDK. `Task.textValues` supplies named, exact candidate values for the selected model to choose from. Only the selected provider's API key is required.
 - Reads the screen again and compares fingerprints before execution. A stale screen stops the task so old node IDs cannot be reused on a changed interface.
+- Waits for the stop control to be laid out before the first observation. Gesture geometry is checked separately, so overlay layout does not invalidate native node actions while a model request is in flight.
 - Reads back text after input to verify the complete value. Rejected actions stop the task and are not automatically replayed.
 - Includes package allowlists, step and time budgets, a minimum confidence threshold, no-progress detection, and a host-defined action policy.
 - Coroutine cancellation cancels in-flight HTTP requests. An accessibility overlay button stops future actions. Actions already submitted to Android cannot be undone; a submitted hold may continue until its configured duration expires and the touch is released.
@@ -137,7 +138,7 @@ Adjust the JDK path for your installation. The script preserves the original pro
 
 - `sample/build/outputs/apk/debug/sample-debug.apk`
 - `sdk/build/outputs/aar/sdk-release.aar`
-- `core/build/libs/core-0.3.0.jar`
+- `core/build/libs/core-0.3.1.jar`
 
 **The AAR does not bundle all dependencies.** The SDK also depends on the core module, coroutines, OkHttp, and Gson. Use one of the source-module or Maven integration options below.
 
@@ -169,7 +170,7 @@ maven { url = uri("vendor/jev-maven") }
 Add these dependencies to the host app:
 
 ```kotlin
-implementation("io.github.jevandroid:jev-android:0.3.0")
+implementation("io.github.jevandroid:jev-android:0.3.1")
 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 ```
 
