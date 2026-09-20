@@ -41,6 +41,8 @@ The execution loop reads controls, builds valid choices, asks the selected provi
 
 DeepSeek calls `https://api.deepseek.com/chat/completions` with JSON mode and thinking disabled to reduce decision latency. The model chooses among the current screen's allowed actions and supplied text values; this is UI decision support, not a separate text-generation stage. Both providers accept a custom `model` value. Choose a model available to your account that supports the provider's request format. See the [DeepSeek API reference](https://api-docs.deepseek.com/api/create-chat-completion/).
 
+DeepSeek has a 1,024-token response budget. An empty, truncated, or invalid decision can trigger one correction request before any UI action is submitted. The correction uses the same original snapshot and task context plus a fixed rejection reason; it does not include the malformed response. The corrected decision must pass the same strict validation, host policy, and fresh-screen checks. HTTP/network failures, refusals, content filtering, and tool calls are not retried. This addresses documented [JSON-mode output limitations](https://api-docs.deepseek.com/guides/json_mode/) without accepting arbitrary actions or targets.
+
 The shared confidence threshold has different meanings for the two backends. Jev provides probability distributions over the supplied choices; DeepSeek must return a self-reported confidence value in its JSON response. DeepSeek's value is not calibrated or directly comparable to Jev's probabilities, and neither is proof that an action is correct. Use host policies and outcome verification for decisions that require stronger assurance.
 
 ## Build
@@ -139,7 +141,7 @@ Adjust the JDK path for your installation. The script preserves the original pro
 
 - `sample/build/outputs/apk/debug/sample-debug.apk`
 - `sdk/build/outputs/aar/sdk-release.aar`
-- `core/build/libs/core-0.3.2.jar`
+- `core/build/libs/core-0.3.3.jar`
 
 **The AAR does not bundle all dependencies.** The SDK also depends on the core module, coroutines, OkHttp, and Gson. Use one of the source-module or Maven integration options below.
 
@@ -171,7 +173,7 @@ maven { url = uri("vendor/jev-maven") }
 Add these dependencies to the host app:
 
 ```kotlin
-implementation("io.github.jevandroid:jev-android:0.3.2")
+implementation("io.github.jevandroid:jev-android:0.3.3")
 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 ```
 
@@ -295,13 +297,13 @@ The Bilibili presets target the mainland Android app and are example task instru
 - No screenshots are uploaded. Each provider sends its API key only to its own fixed endpoint: Jev uses `https://api.typesafe.ai/v1/systemone`; DeepSeek uses `https://api.deepseek.com/chat/completions`. Redirects and automatic connection retries are disabled. Selecting one provider does not call the other provider.
 - A snapshot contains at most 220 elements, and node traversal is bounded. Long screens require scrolling. Controls omitted by truncation are not offered to either model.
 - The sample keeps separate keys for Jev and DeepSeek only in memory; switching providers does not reuse the other provider's key. Keys are not persisted or backed up. Screenshots are disabled on the configuration screen. The SDK does not manage host credentials. Apps distributed to other users should use user-supplied keys or a controlled backend.
-- HTTP, protocol, and runtime exceptions reach `onError`. Cancellation follows coroutine cancellation semantics and is not returned as success.
+- HTTP, protocol, and runtime exceptions reach `onError`. DeepSeek response rejections include a sanitized reason code (such as `EMPTY_CONTENT`, `TRUNCATED`, or `INVALID_TARGET`) and attempt count, without raw response content or a nested parser error. One permitted decision correction is separate from HTTP retries and does not replay a UI action. Cancellation follows coroutine cancellation semantics and is not returned as success.
 - Action failure, low confidence, gate rejection, lack of progress, or exhausting the three permitted consecutive stale-screen refreshes returns `BLOCKED`. A refresh requires proof that no action was submitted, reads the current screen, and requests a new provider decision. A successful action resets the consecutive-refresh counter. An already submitted or uncertain operation is never automatically resubmitted.
 - A model's completion claim and Android's `performAction=true` are not evidence that the intended business result was achieved.
 
 ## Tests and future work
 
-Offline tests cover cancellation, timeouts, step limits, allowlists, invalid targets, input-value restrictions, outcome verification, low confidence, stopping without retry after action failure, and Jev response distribution and branch validation. DeepSeek tests cover malformed or truncated responses, invalid action choices, HTTP status handling, response-size limits, and transport cancellation. Long-press tests check action eligibility and provider decisions; sample tests cover scenario configuration and provider-key isolation when switching backends. Provider responses and HTTP behavior are tested with offline fixtures and mocks, not live API calls. Android builds and lint do not establish real-device task success. See [VALIDATION.md](VALIDATION.md) for the current validation status.
+Offline tests cover cancellation, timeouts, step limits, allowlists, invalid targets, input-value restrictions, outcome verification, low confidence, stopping without resubmitting a failed action, and Jev response distribution and branch validation. DeepSeek tests cover malformed or truncated responses, invalid action choices, bounded decision correction, sanitized rejection reasons, HTTP status handling, response-size limits, and transport cancellation. Long-press tests check action eligibility and provider decisions; sample tests cover scenario configuration and provider-key isolation when switching backends. Provider responses and HTTP behavior are tested with offline fixtures and mocks, not live API calls. Android builds and lint do not establish real-device task success. See [VALIDATION.md](VALIDATION.md) for the current validation status.
 
 The `:sample:connectedDebugAndroidTest` task uses a deterministic decision provider on a connected emulator or test device. It checks real accessibility reads, text entry, clicking, long-pressing, result verification, app launch completion, stale-screen refreshes, and allowlist enforcement. Tests temporarily enable the service and restore the previous accessibility settings afterward. Run them only on a dedicated test device. These automated results do not call Jev or DeepSeek or establish live API availability or real-model success rates.
 

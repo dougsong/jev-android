@@ -41,6 +41,8 @@ API 尚未稳定。项目未发布到 Maven Central；下文的依赖坐标仅�
 
 DeepSeek 调用 `https://api.deepseek.com/chat/completions`，使用 JSON 模式并关闭思考以降低决策延迟。模型从当前页面允许的动作和调用方提供的文字候选中进行选择；它直接负责 UI 决策，不是单独的文字生成步骤。两个提供者均接受自定义 `model`，请选用账号可访问、且兼容对应请求格式的模型。参见 [DeepSeek API 文档](https://api-docs.deepseek.com/api/create-chat-completion/)。
 
+DeepSeek 的响应上限为 1,024 tokens。在提交任何 UI 操作前，如果决策为空、被截断或无效，最多发起一次纠正请求。纠正请求复用原始页面快照和任务上下文，只附加固定的拒绝原因，不附加格式错误的原始回复。纠正后的决策仍须经过相同的严格校验、宿主策略和页面时效检查。HTTP 或网络错误、模型拒绝、内容过滤及工具调用不会触发重试。这一机制应对官方说明的 [JSON 模式输出限制](https://api-docs.deepseek.com/guides/json_mode/)，不会放宽允许的动作或目标范围。
+
 共用的最低置信度阈值在两个后端中含义不同。Jev 返回给定选项的概率分布；DeepSeek 必须在 JSON 响应中给出自报的置信度。DeepSeek 的数值未经校准，不能与 Jev 的概率直接比较，两者也都不能证明动作正确。需要更强保证的决策应依靠宿主策略和结果验证。
 
 ## 构建
@@ -139,7 +141,7 @@ Linux 使用 `./gradlew`。项目设置了 `android.overridePathCheck=true`，�
 
 - `sample/build/outputs/apk/debug/sample-debug.apk`
 - `sdk/build/outputs/aar/sdk-release.aar`
-- `core/build/libs/core-0.3.2.jar`
+- `core/build/libs/core-0.3.3.jar`
 
 **AAR 不包含全部依赖。** SDK 还依赖 core 模块、协程、OkHttp 和 Gson，建议按下面的源码模块或 Maven 方式接入。
 
@@ -171,7 +173,7 @@ maven { url = uri("vendor/jev-maven") }
 宿主 app 添加依赖：
 
 ```kotlin
-implementation("io.github.jevandroid:jev-android:0.3.2")
+implementation("io.github.jevandroid:jev-android:0.3.3")
 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 ```
 
@@ -295,13 +297,13 @@ B 站预设面向国内版 Android App，是任务说明示例，尚未验证为
 - 不上传截图。各后端只将自己的 API Key 发送到对应的固定地址：Jev 使用 `https://api.typesafe.ai/v1/systemone`，DeepSeek 使用 `https://api.deepseek.com/chat/completions`。禁用重定向和自动连接重试；选择一个后端不会调用另一个后端。
 - 单个快照最多包含 220 个元素，节点遍历也有上限。较长页面需要滚动；截断后未包含的控件不会提供给任何模型。
 - 示例分别在内存中保存 Jev 与 DeepSeek 的 Key，切换后端不会复用另一个后端的密钥。密钥不持久化或备份；配置页面禁止截图。SDK 不替宿主管理凭据。向其他用户分发时，建议使用用户自备 Key 或受控后端。
-- HTTP、协议和运行时异常交给 `onError`；取消遵循协程取消语义，不作为成功返回。
+- HTTP、协议和运行时异常交给 `onError`。DeepSeek 响应被拒绝时，提供脱敏的原因代码（如 `EMPTY_CONTENT`、`TRUNCATED` 或 `INVALID_TARGET`）及尝试次数，不包含原始响应内容或嵌套解析错误。允许的一次决策纠正不同于 HTTP 重试，也不会重复执行 UI 操作。取消遵循协程取消语义，不作为成功返回。
 - 操作失败、低置信度、gate 拒绝、无进展或用尽连续三次页面刷新机会时返回 `BLOCKED`。刷新要求确认动作尚未提交，重新读取当前页面，并让后端做出新决策。成功执行动作后会重置连续刷新计数。已提交或结果不确定的操作不会自动重复提交。
 - 模型声称完成，以及 Android 返回 `performAction=true`，都不是业务结果成功的证据。
 
 ## 测试与后续工作
 
-离线测试覆盖取消、超时、步骤限制、白名单、无效目标、输入值限制、结果验证、低置信度、动作失败后停止且不重试，以及 Jev 响应的概率分布与分支校验。DeepSeek 测试覆盖格式错误或被截断的响应、无效动作选项、HTTP 状态处理、响应大小限制及网络请求取消。长按测试检查动作是否可用及后端决策；示例测试覆盖场景配置和切换后端时的密钥隔离。后端响应和 HTTP 行为使用离线样例与模拟请求验证，不调用真实 API。Android 构建和 lint 通过不等于真机任务成功，当前验证状态见 [VALIDATION.md](VALIDATION.md)。
+离线测试覆盖取消、超时、步骤限制、白名单、无效目标、输入值限制、结果验证、低置信度、动作失败后停止且不重复提交，以及 Jev 响应的概率分布与分支校验。DeepSeek 测试覆盖格式错误或被截断的响应、无效动作选项、有限次数的决策纠正、脱敏拒绝原因、HTTP 状态处理、响应大小限制及网络请求取消。长按测试检查动作是否可用及后端决策；示例测试覆盖场景配置和切换后端时的密钥隔离。后端响应和 HTTP 行为使用离线样例与模拟请求验证，不调用真实 API。Android 构建和 lint 通过不等于真机任务成功，当前验证状态见 [VALIDATION.md](VALIDATION.md)。
 
 `:sample:connectedDebugAndroidTest` 在连接的模拟器或测试设备上使用确定性决策提供者，检查真实无障碍读取、输入、点击、长按、结果验证、应用启动完成、过期页面刷新和白名单限制。测试会临时开启服务，并在结束后恢复原有无障碍设置。请仅在专用测试设备上运行；这些自动化结果不调用 Jev 或 DeepSeek，不能证明实时 API 可用性或真实模型成功率。
 

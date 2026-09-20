@@ -25,13 +25,24 @@ class DeepSeekProtocolTest {
 
     private fun parse(content: JSONObject) = DeepSeekProtocol.parse(envelope(content.toString()).toString(), task, snapshot)
 
-    private fun rejected(raw: String, usedTask: Task = task, usedSnapshot: UiSnapshot = snapshot) {
+    private fun rejected(
+        raw: String,
+        usedTask: Task = task,
+        usedSnapshot: UiSnapshot = snapshot,
+        expectedReason: DeepSeekRejectionReason? = null,
+    ) {
         try {
             DeepSeekProtocol.parse(raw, usedTask, usedSnapshot)
             fail("Expected rejection")
-        } catch (e: IllegalArgumentException) {
-            assertEquals("DeepSeek response rejected", e.message)
+        } catch (e: DeepSeekResponseException) {
+            if (expectedReason != null) assertEquals(expectedReason, e.reason)
+            assertEquals(1, e.attempts)
+            assertTrue(e.message!!.contains("[${e.reason.name}]"))
+            assertTrue(e.message!!.contains(e.reason.explanation))
+            assertTrue(e.message!!.contains("no action sent for this decision"))
             assertNull(e.cause)
+            assertFalse(e.stackTraceToString().contains("private-api-key-and-ui-text"))
+            assertFalse(e.stackTraceToString().contains("sensitive-value"))
         }
     }
 
@@ -41,7 +52,7 @@ class DeepSeekProtocolTest {
         assertFalse(request.getBoolean("stream"))
         assertEquals("disabled", request.getJSONObject("thinking").getString("type"))
         assertEquals("json_object", request.getJSONObject("response_format").getString("type"))
-        assertEquals(256, request.getInt("max_tokens"))
+        assertEquals(1024, request.getInt("max_tokens"))
         assertEquals(0.0, request.getDouble("temperature"), 0.0)
         val messages = request.getJSONArray("messages")
         assertEquals("system", messages.getJSONObject(0).getString("role"))
@@ -242,5 +253,130 @@ class DeepSeekProtocolTest {
     @Test fun responseErrorsNeverExposeRawContentOrCauses() {
         rejected("private-api-key-and-ui-text")
         rejected(envelope("private-api-key-and-ui-text").toString())
+    }
+
+    @Test fun nullOptionalEnvelopeMetadataDoesNotRejectAValidDecision() {
+        val response = envelope(content().toString()).put("error", JSONObject.NULL)
+        val message = response.getJSONArray("choices").getJSONObject(0).getJSONObject("message")
+        for (field in listOf("tool_calls", "function_call", "refusal")) message.put(field, JSONObject.NULL)
+        assertEquals(Decision(Operation.SET_TEXT, "7", "greeting", 0.9),
+            DeepSeekProtocol.parse(response.toString(), task, snapshot))
+        message.put("tool_calls", JSONArray())
+        assertEquals(Operation.SET_TEXT, DeepSeekProtocol.parse(response.toString(), task, snapshot).operation)
+    }
+
+    @Test fun actualOrMalformedToolMetadataIsTerminal() {
+        for (tools in listOf(JSONArray().put(JSONObject().put("id", "sensitive-value")), JSONObject(), false, "")) {
+            val response = envelope(content().toString())
+            response.getJSONArray("choices").getJSONObject(0).getJSONObject("message").put("tool_calls", tools)
+            rejected(response.toString(), expectedReason = DeepSeekRejectionReason.UNEXPECTED_TOOLS)
+        }
+        val function = envelope(content().toString())
+        function.getJSONArray("choices").getJSONObject(0).getJSONObject("message").put("function_call", JSONObject())
+        rejected(function.toString(), expectedReason = DeepSeekRejectionReason.UNEXPECTED_TOOLS)
+    }
+
+    @Test fun apiErrorsAndRefusalsHaveTerminalCategories() {
+        rejected(envelope(content().toString()).put("error", JSONObject().put("message", "sensitive-value")).toString(),
+            expectedReason = DeepSeekRejectionReason.RESPONSE_ERROR)
+        for (refusal in listOf("sensitive-value", "")) {
+            val response = envelope(content().toString())
+            response.getJSONArray("choices").getJSONObject(0).getJSONObject("message").put("refusal", refusal)
+            rejected(response.toString(), expectedReason = DeepSeekRejectionReason.REFUSAL)
+        }
+    }
+
+    @Test fun incompleteCompletionsHaveSeparateSanitizedCategories() {
+        for ((finish, reason) in listOf(
+            "length" to DeepSeekRejectionReason.TRUNCATED,
+            "content_filter" to DeepSeekRejectionReason.FILTERED,
+            "tool_calls" to DeepSeekRejectionReason.UNEXPECTED_TOOLS,
+            "insufficient_system_resource" to DeepSeekRejectionReason.INCOMPLETE_COMPLETION,
+            "sensitive-value" to DeepSeekRejectionReason.INCOMPLETE_COMPLETION,
+        )) {
+            val response = envelope(content().toString())
+            response.getJSONArray("choices").getJSONObject(0).put("finish_reason", finish)
+            rejected(response.toString(), expectedReason = reason)
+        }
+    }
+
+    @Test fun refusalAndToolMetadataCannotBeRepairedAsTruncation() {
+        for ((field, reason) in listOf("refusal" to DeepSeekRejectionReason.REFUSAL,
+            "tool_calls" to DeepSeekRejectionReason.UNEXPECTED_TOOLS)) {
+            val response = envelope(content().toString())
+            val choice = response.getJSONArray("choices").getJSONObject(0).put("finish_reason", "length")
+            choice.getJSONObject("message").put(field, "sensitive-value")
+            rejected(response.toString(), expectedReason = reason)
+        }
+    }
+
+    @Test fun blankAndNullContentAreClassifiedAsEmpty() {
+        for (empty in listOf("", " \n\t", JSONObject.NULL)) {
+            val response = envelope(content().toString())
+            response.getJSONArray("choices").getJSONObject(0).getJSONObject("message").put("content", empty)
+            rejected(response.toString(), expectedReason = DeepSeekRejectionReason.EMPTY_CONTENT)
+        }
+    }
+
+    @Test fun envelopeAndDecisionJsonFailuresAreDistinguished() {
+        rejected("private-api-key-and-ui-text", expectedReason = DeepSeekRejectionReason.INVALID_ENVELOPE)
+        rejected(envelope("private-api-key-and-ui-text").toString(), expectedReason = DeepSeekRejectionReason.INVALID_JSON)
+        rejected(envelope(content().put("explanation", "sensitive-value").toString()).toString(),
+            expectedReason = DeepSeekRejectionReason.INVALID_SCHEMA)
+        rejected(envelope(content().put("target", 7).toString()).toString(),
+            expectedReason = DeepSeekRejectionReason.INVALID_SCHEMA)
+    }
+
+    @Test fun candidateFailuresHaveSanitizedSpecificCategories() {
+        rejected(envelope(content("sensitive-value").toString()).toString(),
+            expectedReason = DeepSeekRejectionReason.UNSUPPORTED_OPERATION)
+        rejected(envelope(content("CLICK", "sensitive-value", JSONObject.NULL).toString()).toString(),
+            expectedReason = DeepSeekRejectionReason.INVALID_TARGET)
+        rejected(envelope(content(textKey = "sensitive-value").toString()).toString(),
+            expectedReason = DeepSeekRejectionReason.INVALID_TEXT_KEY)
+        rejected(envelope(content().put("confidence", "sensitive-value").toString()).toString(),
+            expectedReason = DeepSeekRejectionReason.INVALID_CONFIDENCE)
+    }
+
+    @Test fun onlyCorrectableDecisionRejectionsAllowRepair() {
+        assertEquals(setOf(DeepSeekRejectionReason.EMPTY_CONTENT, DeepSeekRejectionReason.TRUNCATED,
+            DeepSeekRejectionReason.INVALID_JSON, DeepSeekRejectionReason.INVALID_SCHEMA,
+            DeepSeekRejectionReason.UNSUPPORTED_OPERATION, DeepSeekRejectionReason.INVALID_TARGET,
+            DeepSeekRejectionReason.INVALID_TEXT_KEY, DeepSeekRejectionReason.INVALID_CONFIDENCE),
+            DeepSeekRejectionReason.entries.filter { it.canRepair }.toSet())
+    }
+
+    @Test fun exampleCopiesAnObservedClickCandidateAndUsesQuotedIds() {
+        val request = DeepSeekProtocol.request(task, snapshot, emptyList(), "deepseek-flash")
+        val instructions = request.getJSONArray("messages").getJSONObject(0).getString("content")
+        val example = JSONObject(instructions.substringAfterLast(": "))
+        assertEquals("CLICK", example.getString("operation"))
+        assertEquals("8", example.get("target"))
+        assertTrue(example.isNull("text_key"))
+        assertTrue(instructions.contains("even when the ID looks numeric"))
+    }
+
+    @Test fun exampleUsesWaitWhenNoClickCandidateIsAllowed() {
+        val observed = snapshot.copy(packageName = "other.app")
+        val request = DeepSeekProtocol.request(task, observed, emptyList(), "deepseek-flash")
+        val instructions = request.getJSONArray("messages").getJSONObject(0).getString("content")
+        val example = JSONObject(instructions.substringAfterLast(": "))
+        assertEquals("WAIT", example.getString("operation"))
+        assertTrue(example.isNull("target"))
+    }
+
+    @Test fun repairPromptContainsOnlyFixedDiagnosticAndPreservesState() {
+        val original = DeepSeekProtocol.request(task, snapshot, emptyList(), "deepseek-flash")
+        val repaired = DeepSeekProtocol.request(task, snapshot, emptyList(), "deepseek-flash",
+            DeepSeekRejectionReason.INVALID_TARGET)
+        assertEquals(1024, repaired.getInt("max_tokens"))
+        val originalMessages = original.getJSONArray("messages")
+        val repairedMessages = repaired.getJSONArray("messages")
+        assertEquals(2, repairedMessages.length())
+        assertEquals(originalMessages.getJSONObject(1).toString(), repairedMessages.getJSONObject(1).toString())
+        val instructions = repairedMessages.getJSONObject(0).getString("content")
+        assertTrue(instructions.startsWith(originalMessages.getJSONObject(0).getString("content")))
+        assertTrue(instructions.contains("INVALID_TARGET"))
+        assertTrue(instructions.contains(DeepSeekRejectionReason.INVALID_TARGET.explanation))
     }
 }

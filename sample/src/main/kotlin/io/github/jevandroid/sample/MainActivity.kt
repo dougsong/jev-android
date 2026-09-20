@@ -32,7 +32,7 @@ class MainActivity : Activity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         val column = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(32, 32, 32, 32) }
         setContentView(ScrollView(this).apply { addView(column) })
-        column.addView(TextView(this).apply { text = "Jev Android SDK · 0.3.2"; textSize = 25f })
+        column.addView(TextView(this).apply { text = "Jev Android SDK · 0.3.3"; textSize = 25f })
         status = TextView(this).apply { text = "Ready"; textSize = 16f }
         column.addView(status)
         column.addView(TextView(this).apply { text = "Decision provider" })
@@ -158,7 +158,8 @@ class MainActivity : Activity() {
                             is AgentEvent.Executed -> "Step ${event.record.step}: accepted=${event.record.accepted}"
                             is AgentEvent.Finished -> "${event.result.status}: ${event.result.message}"
                         }) },
-                        onError = { append("Failed: ${it.javaClass.simpleName} ${it.message}") })
+                        onError = { error -> append(if (error is DeepSeekResponseException) requireNotNull(error.message)
+                            else "Failed: ${error.javaClass.simpleName} ${error.message}") })
                     run.join()
                     if (run.isCancelled) append("Task stopped")
                 } catch (e: Exception) {

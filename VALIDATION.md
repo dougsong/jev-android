@@ -1,6 +1,24 @@
 # Validation record
 
-Date: 2026-09-20. This record covers version 0.3.2, with earlier device and regression results retained under their version labels.
+Date: 2026-09-20. This record covers version 0.3.3, with earlier device and regression results retained under their version labels.
+
+## Version 0.3.3 DeepSeek response handling
+
+The user reported `Failed: IllegalArgumentException DeepSeek response rejected` while running the Bilibili triple-action preset on version 0.3.2. The retained event logs showed accepted app launch, search-field selection, text entry, and search submission before a response-parsing failure in two runs. The raw provider responses were discarded, so those logs do not establish which response field or validation condition caused the failure. The earlier launch-transition and stop-overlay regressions do not explain this parser error.
+
+Version 0.3.3 replaces the generic rejection message with a typed, sanitized reason code and attempt count. Optional `error`, `function_call`, and `tool_calls` fields may be null, and an empty `tool_calls` array is tolerated. Actual tool calls, refusals, content filtering, and invalid actions or targets remain rejected. The output budget increases from 256 to 1,024 tokens. DeepSeek's [JSON mode documentation](https://api-docs.deepseek.com/guides/json_mode/) notes that an empty response can occur and that insufficient `max_tokens` can truncate JSON; these are handled cases, not confirmed causes of the user's two failures.
+
+An empty, truncated, or invalid decision permits one correction request before a UI action is submitted. It reuses the original snapshot, task context, and a fixed reason code, without forwarding the malformed response. A corrected decision still passes the original action/target validation, host gate, and fresh-screen checks. HTTP/network failures, refusals, content filtering, and tool-call responses are terminal; cancellation stops pending work. Final rejection diagnostics contain no raw response or nested parser exception. This is separate from the stale-screen refresh mechanism and never resubmits an already dispatched UI action.
+
+### Version 0.3.3 verification status
+
+All **120 offline tests passed**: 29 core, 83 SDK, and 8 sample tests. The SDK total includes 38 DeepSeek protocol tests and 7 decision-correction tests. The new cases exercise nullable metadata, typed rejection reasons, at most two model requests per decision, preserved decision context, no forwarded malformed response, terminal HTTP/refusal/filter/tool failures, cancellation, diagnostic redaction, and exactly one UI action after a corrected decision passes validation. All model responses in these tests are fixtures; no real DeepSeek API key or response is used.
+
+The release AAR, demo APK, instrumented test APK, and both local Maven publications built successfully at version 0.3.3. Lint reported 0 errors with 6 SDK warnings and 35 sample warnings; the build is not warning-free.
+
+The installed 0.3.3 demo passed **3 Samsung device smoke tests, 0 failures**, in 7.480 seconds: scenario selection, delayed text entry and Save, and a changed target requiring a new decision before exactly one Save click. These use deterministic providers; they do not exercise a live DeepSeek response or Bilibili triple action. The Samsung long-press setting remained `1` throughout this run. Afterward the test APK was removed, demo versionCode 6 / versionName 0.3.3 was verified, and the original accessibility-service list (including Bixby) was restored with the Jev service bound.
+
+The version 0.3.2 seven-test run below remains the prior broader device baseline. The user's original parser failure has not been reproduced with its actual raw response; live DeepSeek/Bilibili completion is still unverified.
 
 ## Version 0.3.2 launch-transition regression
 
@@ -89,7 +107,7 @@ Device tests use a **deterministic `DecisionProvider`** and execute real Android
 - Bilibili search and triple-action presets have not been validated end to end. They have no independent outcome verifier; provider-reported completion is `UNVERIFIED`.
 - macOS setup instructions are included, but the project has not been built or run on a Mac in this validation session.
 - Physical Xiaomi testing has not been performed. HyperOS permissions, background behavior, and third-party app task success rates have not been verified.
-- Android version coverage is incomplete. API 26 is the declared minimum; completed device tests cover API 36 for version 0.3.1 and API 33 for the earlier baseline. Version 0.3.2 device verification is pending.
+- Android version coverage is incomplete. API 26 is the declared minimum; completed device tests cover API 36 for versions 0.3.1 and 0.3.2, and API 33 for the earlier baseline. Version 0.3.3 device verification is pending.
 - SDK artifacts have not been published to Maven Central or an app store. The source is MIT-licensed; the artifact and group coordinates currently exist only in the local Maven distribution.
 
 ## Local reports
@@ -97,11 +115,12 @@ Device tests use a **deterministic `DecisionProvider`** and execute real Android
 - `core/build/reports/tests/test/index.html`
 - `sdk/build/reports/tests/testDebugUnitTest/index.html`
 - `sample/build/reports/tests/testDebugUnitTest/index.html`
+- `sample/build/reports/samsung-smoke-0.3.3.txt` (current three-test device smoke result)
 - `sample/build/reports/deepseek-delay-regression-before-0.3.1.txt` (delayed save-text failure on 0.3.0)
 - `sample/build/reports/deepseek-delay-regression-after-0.3.1.txt` (same delayed save-text test passing on 0.3.1)
 - `sample/build/reports/launch-refresh-regression-0.3.2.txt` (two focused regression tests)
 - `sample/build/reports/bilibili-launch-regression-0.3.2.txt` (real Bilibili launch with the original Samsung setting)
-- `sample/build/reports/samsung-instrumentation-0.3.2.txt` (current seven-test device result)
+- `sample/build/reports/samsung-instrumentation-0.3.2.txt` (previous seven-test device result)
 - `sample/build/reports/samsung-instrumentation-0.3.2-cleanup-timeout.txt` (earlier test-framework cleanup timeout; superseded by the final run)
 - `sample/build/reports/samsung-instrumentation-0.3.1.txt` (previous five-test device result)
 - `sdk/build/reports/lint-results-debug.html`
