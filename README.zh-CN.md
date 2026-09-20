@@ -31,20 +31,87 @@
 
 ## 构建
 
-使用 JDK 17 或兼容版本，以及 Android SDK Platform 36。项目自带 Gradle 8.13 Wrapper。可以用 Android Studio 打开项目根目录，或通过 `ANDROID_HOME`、不纳入版本管理的 `local.properties` 配置 SDK 路径：
+使用 JDK 17 或 21，以及 Android SDK Platform 36。项目自带 Gradle 8.13 Wrapper。可以用 Android Studio 打开项目根目录，或通过 `ANDROID_HOME`、不纳入版本管理的 `local.properties` 配置 SDK 路径：
 
 ```properties
 sdk.dir=/your/path/to/Android/Sdk
 ```
 
-Windows 命令：
+### macOS（Apple 芯片和 Intel）
+
+Mac 用于开发、构建 SDK，并将示例安装到 Android 手机或模拟器。Agent 在 Android 上运行，不控制 macOS 或 iOS。
+
+**1. 安装开发环境。** 安装适合 Mac 芯片架构的 [Android Studio](https://developer.android.com/studio)，完成首次启动向导。在 **SDK Manager** 中安装 Android SDK Platform 36、Android SDK Platform-Tools 和 Android SDK Build-Tools 35.0.0（勾选 **Show Package Details** 后选择该版本）。如果使用模拟器，还需安装 Android Emulator，并选择匹配 Mac 架构的系统镜像：Apple 芯片使用 ARM64，Intel 使用 x86_64；镜像 API 版本应为 26 或以上。
+
+**2. 克隆项目。** 在终端执行：
+
+```bash
+git clone https://github.com/dougsong/jev-android.git
+cd jev-android
+chmod +x gradlew
+```
+
+如果运行 `git` 时 macOS 提示安装 Command Line Tools，请先完成安装。无需单独安装 Gradle，使用项目自带的 Wrapper 即可。
+
+**3. 配置 Java 和 Android SDK。** 以下假设 Android Studio 安装在 `/Applications`，SDK 使用默认位置：
+
+```bash
+export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
+export ANDROID_HOME="$HOME/Library/Android/sdk"
+export PATH="$JAVA_HOME/bin:$ANDROID_HOME/platform-tools:$PATH"
+java -version
+./gradlew --version
+```
+
+本项目使用 JDK 17 或 21。请检查上面输出的实际版本，不要直接假设 Android Studio 内置 JDK 的版本。如果内置版本不同，安装适合 Mac 架构的 JDK 17，并将 `JAVA_HOME` 指向该安装目录；已向 macOS 注册的 JDK 可以通过 `export JAVA_HOME="$(/usr/libexec/java_home -v 17)"` 选择。切换 JDK 后，重新执行上面的 `PATH` 配置和版本检查命令。从 Android Studio 构建时，在 **Settings > Build, Execution, Deployment > Build Tools > Gradle > Gradle JDK** 选择相同的 JDK。
+
+如果修改过 SDK 安装位置，请按照 SDK Manager 显示的位置调整 `ANDROID_HOME`。这些环境变量仅对当前终端生效，可以将适当的配置加入 `~/.zshrc`。如果项目从 Windows 复制而来，请删除或修改未跟踪的 `local.properties`，避免旧的 Windows `sdk.dir` 覆盖 Mac SDK 路径。
+
+**4. 构建并运行离线检查。** 在项目根目录执行：
+
+```bash
+./gradlew :core:test :sdk:testDebugUnitTest :sdk:assembleRelease :sample:assembleDebug
+./gradlew :sdk:lintDebug :sample:lintDebug
+```
+
+首次构建会下载 Gradle 和依赖。也可以用 Android Studio 打开项目，等待 Gradle 同步完成，然后选择 Android 设备运行 `sample` 配置。产物路径见下文。
+
+**5. 安装并试用示例。** 使用真机时，开启开发者选项和 USB 调试，用支持数据传输的 USB 线连接 Mac，解锁手机并接受调试授权提示。macOS 的 ADB 无需额外安装厂商 USB 驱动。也可以在 Android Studio 的 **Device Manager** 中启动模拟器。仅连接一个目标设备时执行：
+
+```bash
+adb devices
+adb install -r sample/build/outputs/apk/debug/sample-debug.apk
+adb shell am start -n io.github.jevandroid.sample/.MainActivity
+```
+
+目标状态应为 `device`，不能是 `unauthorized` 或 `offline`。连接多个设备时，在安装和启动命令的 `adb` 后加上 `-s YOUR_DEVICE_SERIAL`。在 App 中填写 TypeSafe Key，手动开启无障碍服务，再选择 **Run on the built-in test page**，并保持设备解锁。密钥不要写入终端命令或提交到仓库。安装完成后，示例通过手机自己的网络连接模型，无需持续连接 Mac。
+
+可选：在专用模拟器或测试设备上运行设备测试：
+
+```bash
+./gradlew :sample:connectedDebugAndroidTest
+```
+
+该任务会安装测试 APK、临时开启无障碍服务，并在结束后恢复之前的设置。它使用确定性决策提供者，不调用 Jev。请仅连接预期的测试设备，因为 Gradle 可能在多个已连接设备上运行测试。
+
+**6. 接入其他 Android 项目。** 按下文的源码模块方式接入，或在 Mac 上生成本地 Maven 仓库：
+
+```bash
+./gradlew :core:publishCorePublicationToLocalBuildRepository :sdk:publishReleasePublicationToLocalBuildRepository
+```
+
+将 `build/repository` 复制到宿主项目的 `vendor/jev-maven`，再按下文配置 Maven 依赖并注册服务。macOS 不需要运行 Windows 临时目录构建脚本。本节已按工程配置和平台文档核对，但尚未在实际 Mac 上执行构建。
+
+平台参考：[AGP 环境要求](https://developer.android.com/build/releases/agp-8-12-0-release-notes)、[Gradle 与 Java 兼容性](https://docs.gradle.org/current/userguide/compatibility.html)、[Android 环境变量](https://developer.android.com/tools/variables)、[真机设置](https://developer.android.com/studio/run/device)、[模拟器架构](https://developer.android.com/studio/run/emulator-acceleration)。
+
+### Windows
 
 ```powershell
 .\gradlew.bat :core:test :sdk:testDebugUnitTest :sdk:assembleRelease :sample:assembleDebug
 .\gradlew.bat :sdk:lintDebug :sample:lintDebug
 ```
 
-macOS 或 Linux 使用 `./gradlew`。项目设置了 `android.overridePathCheck=true`，允许 Windows 非 ASCII 路径。如果第三方工具出现路径相关问题，请改用纯 ASCII 路径。
+Linux 使用 `./gradlew`。项目设置了 `android.overridePathCheck=true`，允许 Windows 非 ASCII 路径。如果第三方工具出现路径相关问题，请改用纯 ASCII 路径。
 
 本机验证时，中文 Windows 路径导致 Gradle 测试进程出现 `ClassNotFoundException`。随附脚本会在新的临时英文目录中构建，再把产物和报告复制回项目：
 
@@ -54,7 +121,7 @@ macOS 或 Linux 使用 `./gradlew`。项目设置了 `android.overridePathCheck=
 
 请按实际安装位置修改 JDK 路径。脚本保留原项目文件；Android SDK 路径仍需通过 `ANDROID_HOME` 或 `local.properties` 提供。
 
-构建产物：
+### 构建产物
 
 - `sample/build/outputs/apk/debug/sample-debug.apk`
 - `sdk/build/outputs/aar/sdk-release.aar`

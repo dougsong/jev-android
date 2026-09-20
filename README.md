@@ -31,20 +31,87 @@ The execution loop reads controls, builds valid choices, asks Jev to select an a
 
 ## Build
 
-Use JDK 17 or a compatible version and Android SDK Platform 36. The project includes the Gradle 8.13 wrapper. Open the root directory in Android Studio, or configure `ANDROID_HOME` or an untracked `local.properties` file:
+Use JDK 17 or 21 and Android SDK Platform 36. The project includes the Gradle 8.13 wrapper. Open the root directory in Android Studio, or configure `ANDROID_HOME` or an untracked `local.properties` file:
 
 ```properties
 sdk.dir=/your/path/to/Android/Sdk
 ```
 
-On Windows:
+### macOS (Apple silicon and Intel)
+
+The Mac is the development machine: build the SDK and install the sample on an Android phone or emulator. The agent runs on Android; it does not control macOS or iOS.
+
+**1. Install the prerequisites.** Install [Android Studio](https://developer.android.com/studio) for your Mac's architecture and complete its setup wizard. In **SDK Manager**, install Android SDK Platform 36, Android SDK Platform-Tools, and Android SDK Build-Tools 35.0.0 (enable **Show Package Details** to select that version). For an emulator, also install Android Emulator and a system image matching your Mac: ARM64 for Apple silicon or x86_64 for Intel. Use an image with API 26 or later.
+
+**2. Clone the project.** Run these commands in Terminal:
+
+```bash
+git clone https://github.com/dougsong/jev-android.git
+cd jev-android
+chmod +x gradlew
+```
+
+If macOS prompts you to install Command Line Tools when running `git`, complete that installation first. You do not need a separate Gradle installation; use the project's wrapper.
+
+**3. Configure Java and the Android SDK.** With Android Studio installed in `/Applications` and the SDK in its default location:
+
+```bash
+export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
+export ANDROID_HOME="$HOME/Library/Android/sdk"
+export PATH="$JAVA_HOME/bin:$ANDROID_HOME/platform-tools:$PATH"
+java -version
+./gradlew --version
+```
+
+Use JDK 17 or 21 for this project. Check the version printed above rather than assuming the bundled JDK version. If Android Studio bundles a different version, install JDK 17 for your Mac's architecture and set `JAVA_HOME` to that installation; a JDK registered with macOS can be selected with `export JAVA_HOME="$(/usr/libexec/java_home -v 17)"`. After switching JDKs, repeat the `PATH` export and version checks above. When building from Android Studio, select the same JDK under **Settings > Build, Execution, Deployment > Build Tools > Gradle > Gradle JDK**.
+
+Adjust `ANDROID_HOME` to the SDK location shown in SDK Manager if you changed it. These exports apply to the current terminal; add the appropriate lines to `~/.zshrc` to reuse them. If you copied a checkout from Windows, remove or update its untracked `local.properties` so an old Windows `sdk.dir` does not override the Mac SDK location.
+
+**4. Build and run offline checks.** From the project root:
+
+```bash
+./gradlew :core:test :sdk:testDebugUnitTest :sdk:assembleRelease :sample:assembleDebug
+./gradlew :sdk:lintDebug :sample:lintDebug
+```
+
+The first build downloads Gradle and dependencies. Alternatively, open the project in Android Studio, let Gradle sync finish, and run the `sample` configuration on a selected Android device. The output paths are listed below.
+
+**5. Install and try the sample.** For a physical phone, enable Developer options and USB debugging, connect it with a data-capable USB cable, unlock it, and accept its debugging authorization prompt. macOS does not need an OEM USB driver for ADB. Alternatively, start an emulator from Android Studio's **Device Manager**. With exactly one target connected:
+
+```bash
+adb devices
+adb install -r sample/build/outputs/apk/debug/sample-debug.apk
+adb shell am start -n io.github.jevandroid.sample/.MainActivity
+```
+
+The target must appear as `device`, not `unauthorized` or `offline`. When several devices are connected, add `-s YOUR_DEVICE_SERIAL` immediately after `adb` in each install or launch command. Enter your TypeSafe key in the app, enable its accessibility service manually, then choose **Run on the built-in test page**. Keep the device unlocked. No key belongs in a shell command or a committed file. After installation, the sample uses its own Internet connection and does not need to stay connected to the Mac.
+
+Optional instrumented fixture tests on a dedicated emulator or test device:
+
+```bash
+./gradlew :sample:connectedDebugAndroidTest
+```
+
+This task installs test APKs, temporarily enables the accessibility service, and restores its previous settings afterward. It uses a deterministic decision provider and does not call Jev. Connect only the intended test device, since Gradle may run connected tests on multiple devices.
+
+**6. Integrate the SDK into another project.** Follow the source-module instructions below, or generate the local Maven repository on your Mac:
+
+```bash
+./gradlew :core:publishCorePublicationToLocalBuildRepository :sdk:publishReleasePublicationToLocalBuildRepository
+```
+
+Copy `build/repository` to the host project's `vendor/jev-maven`, then use the Maven dependency and service registration shown below. The Windows staging script is not needed on macOS. These macOS instructions have been checked against the project configuration and platform documentation; a build on an actual Mac has not yet been performed.
+
+Platform references: [AGP requirements](https://developer.android.com/build/releases/agp-8-12-0-release-notes), [Gradle Java compatibility](https://docs.gradle.org/current/userguide/compatibility.html), [Android environment variables](https://developer.android.com/tools/variables), [device setup](https://developer.android.com/studio/run/device), and [emulator architecture](https://developer.android.com/studio/run/emulator-acceleration).
+
+### Windows
 
 ```powershell
 .\gradlew.bat :core:test :sdk:testDebugUnitTest :sdk:assembleRelease :sample:assembleDebug
 .\gradlew.bat :sdk:lintDebug :sample:lintDebug
 ```
 
-Use `./gradlew` on macOS or Linux. The project sets `android.overridePathCheck=true` to allow non-ASCII Windows paths. Move the project to an ASCII-only path if third-party tools have path-related failures.
+Use `./gradlew` on Linux. The project sets `android.overridePathCheck=true` to allow non-ASCII Windows paths. Move the project to an ASCII-only path if third-party tools have path-related failures.
 
 During local validation, a Windows project path containing Chinese characters caused `ClassNotFoundException` in Gradle test workers. The included script builds in a new temporary ASCII-only directory and copies artifacts and reports back:
 
@@ -54,7 +121,7 @@ During local validation, a Windows project path containing Chinese characters ca
 
 Adjust the JDK path for your installation. The script preserves the original project files. The Android SDK location must still be available through `ANDROID_HOME` or `local.properties`.
 
-Build outputs:
+### Build outputs
 
 - `sample/build/outputs/apk/debug/sample-debug.apk`
 - `sdk/build/outputs/aar/sdk-release.aar`
